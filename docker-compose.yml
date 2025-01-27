@@ -1,0 +1,30 @@
+version: '3'
+services:
+
+  fserver-auth-service:
+    build:
+      context: ./FServerAuth
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+
+  fserver-access-control-service:
+    build:
+      context: ./FServerAccessControl
+      dockerfile: Dockerfile
+    ports:
+      - "8082:8082"
+
+  fserver-storage-service:
+    build:
+      context: ./FServerStorage
+      dockerfile: Dockerfile
+    ports:
+      - "8083:8083"
+
+  fserver-dispatcher:
+    build:
+      context: ./FServerDispatcher
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
