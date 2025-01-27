@@ -39,6 +39,7 @@ public class CryptoStuff {
     public byte[] encrypt(Key key, byte[] inputBytes) throws CryptoException, InvalidAlgorithmParameterException {
         return doCrypto(Cipher.ENCRYPT_MODE, key, inputBytes);
     }
+    
 
     public byte[] decrypt(Key key, byte[] inputBytes) throws CryptoException, InvalidAlgorithmParameterException {
         return doCrypto(Cipher.DECRYPT_MODE, key, inputBytes);

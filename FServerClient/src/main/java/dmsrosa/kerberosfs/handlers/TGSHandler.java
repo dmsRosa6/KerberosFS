@@ -10,15 +10,15 @@ import java.util.logging.Level;
 import javax.crypto.SecretKey;
 import javax.net.ssl.SSLSocket;
 
-import org.example.Client;
-import org.example.crypto.CryptoException;
-import org.example.crypto.CryptoStuff;
-import org.example.utils.Command;
-import org.example.utils.MessageStatus;
-import org.example.utils.RequestTGSMessage;
-import org.example.utils.ResponseTGSMessage;
-import org.example.utils.Utils;
-import org.example.utils.Wrapper;
+import dmsrosa.kerberosfs.Client;
+import dmsrosa.kerberosfs.commands.Command;
+import dmsrosa.kerberosfs.crypto.CryptoException;
+import dmsrosa.kerberosfs.crypto.CryptoStuff;
+import dmsrosa.kerberosfs.messages.MessageStatus;
+import dmsrosa.kerberosfs.messages.RequestTGSMessage;
+import dmsrosa.kerberosfs.messages.ResponseTGSMessage;
+import dmsrosa.kerberosfs.messages.Wrapper;
+import dmsrosa.kerberosfs.utils.RandomUtils;
 
 public class TGSHandler {
 
@@ -31,7 +31,7 @@ public class TGSHandler {
 
             RequestTGSMessage requestMessage = new RequestTGSMessage(Client.SERVICE_ID, encryptedTGT, encryptedAuthenticator);
 
-            byte[] requestMessageSerialized = Utils.serialize(requestMessage);
+            byte[] requestMessageSerialized = RandomUtils.serialize(requestMessage);
 
             // Create wrapper object with serialized request message for auth and its type
             Wrapper wrapper = new Wrapper((byte) 3, requestMessageSerialized, UUID.randomUUID());
@@ -80,7 +80,7 @@ public class TGSHandler {
 
         Client.logger.info("Attempting to deserialize TGS response");
         try {
-            responseTGSMessage = (ResponseTGSMessage) Utils.deserialize(decryptedResponse);
+            responseTGSMessage = (ResponseTGSMessage) RandomUtils.deserialize(decryptedResponse);
         } catch (ClassNotFoundException e) {
             Client.logger.log(Level.WARNING, e.getMessage());
         }

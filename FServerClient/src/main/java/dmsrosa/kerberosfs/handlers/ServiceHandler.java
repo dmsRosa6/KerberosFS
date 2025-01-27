@@ -13,6 +13,13 @@ import javax.net.ssl.SSLSocket;
 import dmsrosa.kerberosfs.Authenticator;
 import dmsrosa.kerberosfs.Client;
 import dmsrosa.kerberosfs.commands.Command;
+import dmsrosa.kerberosfs.crypto.CryptoException;
+import dmsrosa.kerberosfs.crypto.CryptoStuff;
+import dmsrosa.kerberosfs.messages.RequestServiceMessage;
+import dmsrosa.kerberosfs.messages.ResponseServiceMessage;
+import dmsrosa.kerberosfs.messages.ResponseTGSMessage;
+import dmsrosa.kerberosfs.messages.Wrapper;
+import dmsrosa.kerberosfs.utils.RandomUtils;
 
 public class ServiceHandler {
 
@@ -27,15 +34,15 @@ public class ServiceHandler {
             // Create authenticator object for the client
             Authenticator authenticator = new Authenticator(command.getUsername(), Client.CLIENT_ADDR);
             byte[] encryptedAuthenticator = CryptoStuff.getInstance().encrypt(
-                    sgt.getSessionKey(),;
-            requestServiceMessage = new RequestServiceMessage(sgt.getSgt(),
-                    RandomUtils.serialize(authenticator)
-            );
+                    sgt.getSessionKey(),
+                    RandomUtils.serialize(authenticator));
 
-            // Create RequestServiceMessage containing the SGT, encrypted authenticator, and command
+                     // Create RequestServiceMessage containing the SGT, encrypted authenticator, and command
+
             RequestServiceMessage requestServiceMessage = new RequestServiceMessage(sgt.getSgt(),
-                    encryptedAuthenticator, command);
+            encryptedAuthenticator, command);
             byte[] requestMessageSerialized = RandomUtils.serialize(requestServiceMessage);
+
 
             // Wrap the serialized message and create a wrapper object for sending
             Wrapper wrapper = new Wrapper((byte) 6, requestMessageSerialized, UUID.randomUUID());
@@ -63,7 +70,7 @@ public class ServiceHandler {
             SecretKey clientServiceKey = responseTGSMessage.getSessionKey();
             byte[] decryptedResponse = CryptoStuff.getInstance().decrypt(clientServiceKey, encryptedResponse);
 
-            responseServiceMessage = (ResponseServiceMessage) Utils.deserialize(decryptedResponse);
+            responseServiceMessage = (ResponseServiceMessage) RandomUtils.deserialize(decryptedResponse);
         } catch (IOException | ClassNotFoundException | InvalidAlgorithmParameterException | CryptoException e) {
             Client.logger.log(Level.WARNING, e.getMessage());
         }

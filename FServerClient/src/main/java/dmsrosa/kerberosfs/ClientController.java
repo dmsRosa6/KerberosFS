@@ -31,13 +31,17 @@ import javax.net.ssl.TrustManagerFactory;
 
 import dmsrosa.kerberosfs.commands.Command;
 import dmsrosa.kerberosfs.commands.CommandTypes;
+import dmsrosa.kerberosfs.crypto.CryptoStuff;
 import dmsrosa.kerberosfs.handlers.AuthHandler;
 import dmsrosa.kerberosfs.handlers.ServiceHandler;
 import dmsrosa.kerberosfs.handlers.TGSHandler;
 import dmsrosa.kerberosfs.messages.FilePayload;
+import dmsrosa.kerberosfs.messages.ResponseAuthenticationMessage;
 import dmsrosa.kerberosfs.messages.ResponseServiceMessage;
 import dmsrosa.kerberosfs.messages.ResponseTGSMessage;
+import dmsrosa.kerberosfs.messages.Wrapper;
 import dmsrosa.kerberosfs.utils.Pair;
+import dmsrosa.kerberosfs.utils.RandomUtils;
 
 public class ClientController {
 
@@ -113,7 +117,7 @@ public class ClientController {
         Pair<CommandTypes, Command> pair = validateAndSetupCommand(fullCommand, filePayload);
         Client.logger.log(Level.INFO, "Valid Command");
     
-        if (pair.getFirst().equals(CommandTypes.LOGIN)) {
+        if (pair.first.equals(CommandTypes.LOGIN)) {
             Client.logger.log(Level.INFO, "Doing Login");
             processLogin(fullCommand[1], fullCommand[2]);
             return "Success";
@@ -122,7 +126,7 @@ public class ClientController {
         Client.logger.log(Level.INFO, "Executing command");
     
         return executeWithSocket(socket -> {
-            Command command = pair.getSecond();
+            Command command = pair.second;
     
             // Request SGT from TGS
             ResponseTGSMessage sgt = requestServiceTicketFromTGS(socket, command, fullCommand[1]);
@@ -158,7 +162,7 @@ public class ClientController {
         Client.logger.log(Level.INFO, "Requesting SGT for client {0} with command {1}", new Object[]{clientId, command.getCommand()});
 
         Authenticator authenticator = new Authenticator(clientId, Client.CLIENT_ADDR, command);
-        byte[] authenticatorSerialized = Utils.serialize(authenticator);
+        byte[] authenticatorSerialized = RandomUtils.serialize(authenticator);
 
         ResponseAuthenticationMessage tgt = Client.usersDHKey.get(clientId).getTGT();
         tgshandler.sendTGSRequest(socket, tgt.getEncryptedTGT(),

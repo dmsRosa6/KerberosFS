@@ -16,6 +16,7 @@ public class RequestServiceMessage implements Serializable {
         this.authenticator = authenticator;
         this.command = command;
     }
+    
 
     public Command getCommand() {
         return command;
