@@ -4,9 +4,17 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>org.example</groupId>
-    <artifactId>Client</artifactId>
-    <version>1</version>
+    <groupId>dmsrosa.kerberosfs</groupId>
+    <artifactId>kerberos-filesystem-client</artifactId>
+    <version>1.0.0</version>
+    
+    <dependencies>
+        <dependency>
+            <groupId>dmsrosa.kerberosfs</groupId>
+            <artifactId>kerberos-filesystem-common-utils</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+    </dependencies>
     
     <build>
         <plugins>
@@ -26,7 +34,7 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <mainClass>org.example.Client</mainClass>
+                            <mainClass>dms.kerberos.Client</mainClass>
                         </manifest>
                     </archive>
                 </configuration>

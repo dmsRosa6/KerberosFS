@@ -4,11 +4,15 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>org.example</groupId>
-    <artifactId>FServer</artifactId>
-    <version>1</version>
+    <groupId>dmsrosa.kerberosfs</groupId>
+    <artifactId>kerberos-filesystem-dispatcher</artifactId>
+    <version>1.0.0</version>
     <dependencies>
-        <!-- https://mvnrepository.com/artifact/org.web3j/core -->
+        <dependency>
+            <groupId>dmsrosa.kerberosfs</groupId>
+            <artifactId>kerberos-filesystem-common-utils</artifactId>
+            <version>1.0.0</version>
+        </dependency>
         <dependency>
             <groupId>org.web3j</groupId>
             <artifactId>core</artifactId>
@@ -18,6 +22,11 @@
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcprov-jdk15on</artifactId>
             <version>1.70</version>
+        </dependency>
+        <dependency>
+            <groupId>dmsrosa</groupId>
+            <artifactId>kerberos-filesystem-common-utils</artifactId>
+            <version>1.0.0</version>
         </dependency>
     </dependencies>
 
