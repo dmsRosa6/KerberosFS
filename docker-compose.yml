@@ -1,0 +1,29 @@
+services:
+
+  kerberosfs-auth-service:
+    build:
+      context: ./KerberosFSAuth
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+
+  kerberosfs-access-control-service:
+    build:
+      context: ./KerberosFSAccessControl
+      dockerfile: Dockerfile
+    ports:
+      - "8082:8082"
+
+  kerberosfs-storage-service:
+    build:
+      context: ./KerberosFSStorage
+      dockerfile: Dockerfile
+    ports:
+      - "8083:8083"
+
+  kerberosfs-dispatcher:
+    build:
+      context: ./KerberosFSDispatcher
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"

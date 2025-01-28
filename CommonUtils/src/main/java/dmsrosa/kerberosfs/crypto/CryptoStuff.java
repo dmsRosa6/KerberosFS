@@ -48,6 +48,14 @@ public class CryptoStuff {
     private byte[]  doCrypto(int cipherMode, Key key, byte[] inputBytes)
             throws CryptoException, InvalidAlgorithmParameterException {
         try {
+            
+            if (key == null) {
+                throw new CryptoException("Provided key is null");
+            }
+            
+            System.out.println("Key Algorithm: " + key.getAlgorithm() + ", Length: " + key.getEncoded().length);
+
+            
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             
             cipher.init(cipherMode, key, gcmParameterSpec);
@@ -55,7 +63,7 @@ public class CryptoStuff {
             return cipher.doFinal(inputBytes);
 
         } catch ( BadPaddingException | IllegalBlockSizeException | NoSuchAlgorithmException | NoSuchPaddingException | InvalidKeyException ex) {
-            throw new CryptoException("Error encrypting/decrypting data" + ex.getMessage());
+            throw new CryptoException("Error encrypting/decrypting data: " + ex.getMessage());
         }
     }
 

@@ -17,8 +17,12 @@ echo "Removing all Docker images..."
 docker images -q | xargs -r docker rmi -f
 handle_error "Failed to remove images."
 
+#Install common
+echo "Install Common..."
+(cd CommonUtils && mvn clean install)
+
 # Build Maven projects
-services=("FServerDispatcher" "FServerAccessControl" "FServerAuth" "FServerStorage" "FServerClient")
+services=("KerberosFSDispatcher" "KerberosFSAccessControl" "KerberosFSAuth" "KerberosFSStorage" "KerberosFSClient")
 
 for service in "${services[@]}"; do
     echo "Building $service..."
@@ -43,13 +47,13 @@ $compose_cmd up -d
 handle_error "Failed to start services."
 
 # Create network if it doesn't exist
-network_name="kerberos_storage-fserver-network"
+network_name="kerberos_storage-kerberosfs-network"
 echo "Creating network: $network_name (if not exists)..."
 docker network ls | grep -q $network_name || docker network create $network_name
 handle_error "Failed to create network: $network_name."
 
 # Connect containers to the network dynamically
-services_to_connect=("fserver-auth-service" "fserver-access-control-service" "fserver-storage-service" "fserver-dispatcher")
+services_to_connect=("kerberosfs-auth-service" "kerberosfs-access-control-service" "kerberosfs-storage-service" "kerberosfs-dispatcher")
 for service in "${services_to_connect[@]}"; do
     container_name=$(docker ps --filter "name=$service" --format "{{.Names}}" | head -n 1)
     if [ -n "$container_name" ]; then
@@ -62,5 +66,5 @@ done
 
 # Run the client application
 echo "Running the client application..."
-java -jar FServerClient/target/Client-1.jar
+java -jar KerberosFSClient/target/kerberos-filesystem-client-1.0.0.jar
 handle_error "Failed to run the client application."
