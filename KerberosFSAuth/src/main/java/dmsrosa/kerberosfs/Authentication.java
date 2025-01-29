@@ -11,52 +11,37 @@ import java.security.NoSuchAlgorithmException;
 import java.security.spec.InvalidKeySpecException;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
-
 
 public class Authentication {
-    private static final String FILE_PATH = "users.txt"; 
-    private final Map<String, User> users;
-    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
-
-    public Authentication() {
-        File file = new File(FILE_PATH);
-    
-        if (file.exists()) {
-            users = readUsers();
-            for(User u : users.values()){
-                AuthenticationService.logger.warning(u.getUsername());
-            }
-        } else {
-            users = new HashMap<>();
-            try {
-                if (file.createNewFile()) {
-                    System.out.println("User file created at: " + FILE_PATH);
+    private static final String FILE_PATH = "users.txt";
+    private static Map<String, User> users;
+        
+            public Authentication() {
+                File file = new File(FILE_PATH);
+        
+                if (file.exists()) {
+                    users = readUsers();
+            } else {
+                users = new HashMap<>();
+                try {
+                    if (file.createNewFile()) {
+                    }
+                } catch (IOException e) {
+                    throw new IllegalStateException("Failed to create user file at: " + FILE_PATH, e);
                 }
-            } catch (IOException e) {
-                throw new IllegalStateException("Failed to create user file at: " + FILE_PATH, e);
             }
         }
-    }
     
-
-    public byte[] getUsernamePassword(String username) {
-        if (username == null || username.isEmpty()) {
-            return null;
-        }
-
-        lock.readLock().lock();
-        try {
-            User user = users.get(username);
-            if (user == null) {
+        public static byte[] getUsernamePassword(String username) {
+            if (username == null || username.isEmpty()) {
                 return null;
             }
-            return user.getHashedPassword();
-        } catch (Exception e) {
+    
+            User user = users.get(username);
+        if (user == null) {
             return null;
-        } finally {
-            lock.readLock().unlock();
         }
+        return user.getHashedPassword();
     }
 
     public boolean register(String username, String password) {
@@ -64,38 +49,31 @@ public class Authentication {
             return false;
         }
 
-        lock.writeLock().lock();
+        if (users.containsKey(username)) {
+            return false;
+        }
         try {
-            if (users.containsKey(username)) {
-                return false;
-            }
             User user = new User(username, password);
             users.put(username, user);
             writeUsers();
             return true;
         } catch (NoSuchAlgorithmException | InvalidKeySpecException e) {
             return false;
-        } finally {
-            lock.writeLock().unlock();
         }
     }
 
     private void writeUsers() {
-        lock.writeLock().lock();
         try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(FILE_PATH))) {
             oos.writeObject(users);
         } catch (IOException e) {
-        } finally {
-            lock.writeLock().unlock();
+            System.err.println("Error writing user data to file: " + e.getMessage());
         }
     }
 
     @SuppressWarnings("unchecked")
     private Map<String, User> readUsers() {
-        lock.readLock().lock();
         try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(FILE_PATH))) {
             Object obj = ois.readObject();
-            AuthenticationService.logger.warning(obj.toString());
             if (obj instanceof Map) {
                 return (Map<String, User>) obj;
             } else {
@@ -108,10 +86,6 @@ public class Authentication {
         } catch (IOException | ClassNotFoundException e) {
             System.err.println("Error reading user data from file: " + e.getMessage());
             return new HashMap<>();
-        } finally {
-            lock.readLock().unlock();
         }
     }
-    
-
 }

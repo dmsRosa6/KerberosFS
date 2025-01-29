@@ -1,38 +1,38 @@
 package dmsrosa.kerberosfs;
 
-import java.io.ByteArrayOutputStream;
-import java.io.FileInputStream;
-import java.io.InputStream;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
+import java.security.InvalidKeyException;
+import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
 import java.util.Map;
 
+import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
 import javax.crypto.spec.SecretKeySpec;
+
+import dmsrosa.kerberosfs.commands.CommandTypes;
 
 public class AccessControl {
 
     private static final String LOCAL_ENCRYPTION_KEY = "LwSIXXbm75btRD3zEDPkWFueMZUxnVxO";
     private static final String ACCESSES_FILE_PATH = "/app/access.conf";
 
-    private Map<String, String> userPermissions;
-
-    private enum ReadCommands {
-        LS, GET, FILE
-    }
-
-    private enum WriteCommands {
-        MKDIR, PUT, CP
-    }
+    private final Map<String, String> userPermissions;
 
     public AccessControl() {
         userPermissions = new HashMap<>();
-        loadPermissions();
+        if (Files.exists(Paths.get(ACCESSES_FILE_PATH))) {
+            loadPermissions();
+        } else {
+            System.err.println("Access file not found: " + ACCESSES_FILE_PATH);
+        }
     }
 
-    // This method is used to pre-install users in the file.
+    // Load permissions from the encrypted file
     private void loadPermissions() {
         try {
             byte[] keyBytes = LOCAL_ENCRYPTION_KEY.getBytes();
@@ -41,18 +41,7 @@ public class AccessControl {
             Cipher cipher = Cipher.getInstance("AES");
             cipher.init(Cipher.DECRYPT_MODE, secretKey);
 
-            byte[] fileContent;
-            try (InputStream is = new FileInputStream(ACCESSES_FILE_PATH);
-                    ByteArrayOutputStream buffer = new ByteArrayOutputStream()) {
-                int nRead;
-                byte[] data = new byte[1024];
-                while ((nRead = is.read(data, 0, data.length)) != -1) {
-                    buffer.write(data, 0, nRead);
-                }
-                buffer.flush();
-                fileContent = buffer.toByteArray();
-            }
-
+            byte[] fileContent = Files.readAllBytes(Paths.get(ACCESSES_FILE_PATH));
             byte[] decryptedContent = cipher.doFinal(fileContent);
 
             String permissions = new String(decryptedContent);
@@ -60,62 +49,50 @@ public class AccessControl {
 
             for (String line : lines) {
                 String[] parts = line.split(":");
-                userPermissions.put(parts[0].trim(), parts[1].trim());
+                if (parts.length == 2) {
+                    userPermissions.put(parts[0].trim(), parts[1].trim());
+                }
             }
-        } catch (Exception e) {
-            e.printStackTrace();
+        } catch (IOException | InvalidKeyException | NoSuchAlgorithmException | BadPaddingException | IllegalBlockSizeException | NoSuchPaddingException e) {
+            System.err.println("Failed to load permissions: " + e.getMessage());
         }
     }
 
-    // This method is used to check the accesses of the users in the system.
+    // Check if a user has permission to execute a specific command
     public boolean hasPermission(String username, String command) {
         String permission = userPermissions.get(username);
-        if (permission == null)
-            return false;
+        if (permission == null) return false;
 
         return validatePermission(permission, command.toUpperCase());
     }
 
-    // This method is used to check the accesses of the users in the system.
+    // Validate permission against the command type
     private boolean validatePermission(String permission, String command) {
-        if (permission.equals("rw"))
-            return true;
+        if (permission.equals("rw")) return true;
 
-        if (permission.equals("r")) {
-            for (ReadCommands readCommand : ReadCommands.values()) {
-                if (command.equalsIgnoreCase(readCommand.name()))
-                    return true;
-            }
-        } else if (permission.equals("w")) {
-            for (WriteCommands writeCommand : WriteCommands.values()) {
-                if (command.equalsIgnoreCase(writeCommand.name()))
-                    return true;
-            }
+        try {
+            CommandTypes commandType = CommandTypes.valueOf(command.toUpperCase());
+            if (permission.equals("r") && isReadCommand(commandType)) return true;
+            if (permission.equals("w") && isWriteCommand(commandType)) return true;
+        } catch (IllegalArgumentException e) {
+            // Command not recognized
         }
 
         return false;
     }
 
-    /*----- This methods are used to pre-install and check the accesses of the users in the system. And its not used in the project at runtime -----*/
-
-    protected static void addPermission(String username, String permission) {
-        try {
-            byte[] keyBytes = LOCAL_ENCRYPTION_KEY.getBytes();
-            SecretKeySpec secretKey = new SecretKeySpec(keyBytes, "AES");
-
-            Cipher cipher = Cipher.getInstance("AES");
-            cipher.init(Cipher.ENCRYPT_MODE, secretKey);
-
-            String permissionLine = username + ":" + permission + "\n";
-            byte[] encryptedContent = cipher.doFinal(permissionLine.getBytes());
-
-            Files.write(Paths.get(ACCESSES_FILE_PATH), encryptedContent, StandardOpenOption.APPEND);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+    // Determine if a command is a read command
+    private boolean isReadCommand(CommandTypes commandType) {
+        return commandType == CommandTypes.LS || commandType == CommandTypes.GET || commandType == CommandTypes.FILE;
     }
 
-    protected static Map<String, String> getUserPermissions() {
-        return new HashMap<>(new AccessControl().userPermissions);
+    // Determine if a command is a write command
+    private boolean isWriteCommand(CommandTypes commandType) {
+        return commandType == CommandTypes.MKDIR || commandType == CommandTypes.PUT || commandType == CommandTypes.CP;
+    }
+
+    // Get all user permissions (useful for debugging or administrative purposes)
+    public Map<String, String> getUserPermissions() {
+        return new HashMap<>(userPermissions);
     }
 }

@@ -2,272 +2,275 @@ package dmsrosa.kerberosfs;
 
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
-import java.security.KeyManagementException;
+import java.security.GeneralSecurityException;
 import java.security.KeyStore;
-import java.security.KeyStoreException;
-import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
-import java.security.UnrecoverableKeyException;
-import java.security.cert.CertificateException;
-import java.util.Date;
-import java.util.HashMap;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
-import java.util.logging.ConsoleHandler;
-import java.util.logging.Handler;
 import java.util.logging.Level;
-import java.util.logging.LogRecord;
 import java.util.logging.Logger;
-import java.util.logging.SimpleFormatter;
 
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLServerSocketFactory;
 import javax.net.ssl.SSLSocket;
-import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManagerFactory;
 
 import dmsrosa.kerberosfs.messages.Wrapper;
 import dmsrosa.kerberosfs.utils.TimeoutUtils;
 
-
 public class MainDispatcher {
-
-    public enum ModuleName {
-        STORAGE,
-        AUTHENTICATION,
-        ACCESS_CONTROL
-    }
-
-    public static final String KEYSTORE_PASSWORD = "dispatcher_password";
-    public static final String KEYSTORE_PATH = "/app/keystore.jks";
-    public static final String TRUSTSTORE_PASSWORD = "dispatcher_truststore_password";
-    public static final String TRUSTSTORE_PATH = "/app/truststore.jks";
-    public static final String TLS_VERSION = "TLSv1.2";
-    public static final String TLS_CONFIG = "/app/tls-config.properties";
-    public static final int MY_PORT = 8080;
-    public static final long TIMEOUT = 20000;
-
-    private static final Properties properties = new Properties();
-
-    static {
-        try (FileInputStream input = new FileInputStream(TLS_CONFIG)) {
-            properties.load(input);
-        } catch (IOException ex) {
-            ex.printStackTrace();
-        }
-    }
-
-    public static final String[] TLS_PROT_ENF = properties.getProperty("TLS-PROT-ENF").split(",");
-    public static final String[] CIPHERSUITES = properties.getProperty("CIPHERSUITES").split(",");
-    public static final String TLS_AUTH_SRV = properties.getProperty("TLS-AUTH-SRV");
-    public static final String TLS_AUTH_CLI = properties.getProperty("TLS-AUTH-CLI");
-
-    private static String[] getHostAndPort(ModuleName moduleName) {
-        switch (moduleName) {
-            case STORAGE:
-                return new String[] { "172.17.0.1", "8083" };
-            case AUTHENTICATION:
-                return new String[] { "172.17.0.1", "8081" };
-            case ACCESS_CONTROL:
-                return new String[] { "172.17.0.1", "8082" };
-            default:
-                throw new IllegalArgumentException("Invalid module name");
-        }
-    }
-
-    // A map from request IDs to client sockets
-    private static Map<UUID, SSLSocket> clientSocketMap = new HashMap<>();
-
-    // Custom logger to print the timestamp in milliseconds
     private static final Logger logger = Logger.getLogger(MainDispatcher.class.getName());
+    private static final Map<UUID, SSLSocket> clientSocketMap = new ConcurrentHashMap<>();
+    
+    public enum ModuleName {
+        STORAGE, AUTHENTICATION, ACCESS_CONTROL
+    }
+
+    // Configuration
+    private static final Properties properties = new Properties();
+    private static final String KEYSTORE_PATH = "/app/keystore.jks";
+    private static final String TRUSTSTORE_PATH = "/app/truststore.jks";
+    private static final String TLS_CONFIG = "/app/tls-config.properties";
+    private static final int SERVER_PORT = 8080;
+    private static final long REQUEST_TIMEOUT = 20000;
+    
     static {
+        loadTlsConfiguration();
+    }
+
+    public static void main(String[] args) {
         try {
-            Logger rootLogger = Logger.getLogger("");
-            Handler[] handlers = rootLogger.getHandlers();
-            if (handlers[0] instanceof ConsoleHandler) {
-                rootLogger.removeHandler(handlers[0]);
-            }
-
-            ConsoleHandler handler = new ConsoleHandler();
-            handler.setFormatter(new SimpleFormatter() {
-                private static final String format = "[%1$tT,%1$tL] [%2$-7s] [%3$s]: %4$s %n";
-
-                @Override
-                public synchronized String format(LogRecord lr) {
-                    return String.format(format,
-                            new Date(lr.getMillis()),
-                            lr.getLevel().getLocalizedName(),
-                            lr.getLoggerName(),
-                            lr.getMessage());
-                }
-            });
-            logger.addHandler(handler);
-        } catch (SecurityException e) {
-            logger.warning(e.getMessage());
-            e.printStackTrace();
+            logger.info("Starting MainDispatcher server");
+            initTLSServerSocket();
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "Fatal server error", e);
+            System.exit(1);
         }
     }
 
-    public static void main(String[] args) throws Exception {
-        // Set the log level
-        logger.setLevel(Level.INFO);
-
-        // Create a new thread to the client
-        initTLSServerSocket();
+    // Initialization methods
+    private static void loadTlsConfiguration() {
+        try (InputStream input = new FileInputStream(TLS_CONFIG)) {
+            properties.load(input);
+            logger.info("Loaded TLS configuration");
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to load TLS configuration", e);
+        }
     }
 
     private static void initTLSServerSocket() {
-        try {
-            // Keystore
+        try (SSLServerSocket serverSocket = createSSLServerSocket()) {
+            configureServerSocket(serverSocket);
+            startServerLoop(serverSocket);
+        } catch (IOException | GeneralSecurityException e) {
+            logger.log(Level.SEVERE, "SSL server initialization failed", e);
+            throw new RuntimeException("Server initialization failed", e);
+        }
+    }
+
+    private static SSLServerSocket createSSLServerSocket() throws IOException, GeneralSecurityException {
+        SSLContext sslContext = createSSLContext();
+        SSLServerSocketFactory socketFactory = sslContext.getServerSocketFactory();
+        return (SSLServerSocket) socketFactory.createServerSocket(SERVER_PORT);
+    }
+
+    private static SSLContext createSSLContext() throws GeneralSecurityException, IOException {
+        KeyManagerFactory kmf = KeyManagerFactory.getInstance("SunX509");
+        kmf.init(loadKeyStore(), getKeystorePassword());
+        
+        TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        tmf.init(loadTrustStore());
+
+        SSLContext sslContext = SSLContext.getInstance(getTlsVersion());
+        sslContext.init(kmf.getKeyManagers(), tmf.getTrustManagers(), new SecureRandom());
+        return sslContext;
+    }
+
+    // Helper methods
+    private static KeyStore loadKeyStore() throws GeneralSecurityException, IOException {
+        return loadStore(KEYSTORE_PATH, getKeystorePassword());
+    }
+
+    private static KeyStore loadTrustStore() throws GeneralSecurityException, IOException {
+        return loadStore(TRUSTSTORE_PATH, getTruststorePassword());
+    }
+
+    private static KeyStore loadStore(String path, char[] password) throws GeneralSecurityException, IOException {
+        try (InputStream is = new FileInputStream(path)) {
             KeyStore ks = KeyStore.getInstance("JKS");
-            ks.load(new FileInputStream(KEYSTORE_PATH), KEYSTORE_PASSWORD.toCharArray());
-            KeyManagerFactory kmf = KeyManagerFactory.getInstance("SunX509");
-            kmf.init(ks, KEYSTORE_PASSWORD.toCharArray());
+            ks.load(is, password);
+            return ks;
+        }
+    }
 
-            // TrustStore
-            KeyStore trustStore = KeyStore.getInstance("JKS");
-            trustStore.load(new FileInputStream(TRUSTSTORE_PATH), TRUSTSTORE_PASSWORD.toCharArray());
-            TrustManagerFactory trustManagerFactory = TrustManagerFactory
-                    .getInstance(TrustManagerFactory.getDefaultAlgorithm());
-            trustManagerFactory.init(trustStore);
+    private static void configureServerSocket(SSLServerSocket serverSocket) {
+        serverSocket.setEnabledProtocols(getEnabledProtocols());
+        serverSocket.setEnabledCipherSuites(getCipherSuites());
+        serverSocket.setNeedClientAuth(needsClientAuth());
+        logger.info(() -> String.format("Server configured with protocols: %s, ciphers: %s",
+                Arrays.toString(getEnabledProtocols()), Arrays.toString(getCipherSuites())));
+    }
 
-            // SSLContext
-            SSLContext sslContext = SSLContext.getInstance(TLS_VERSION);
-            sslContext.init(kmf.getKeyManagers(), trustManagerFactory.getTrustManagers(), new SecureRandom());
-            SSLServerSocketFactory sslServerSocketFactory = sslContext.getServerSocketFactory();
-            SSLServerSocket serverSocket = (SSLServerSocket) sslServerSocketFactory.createServerSocket(MY_PORT);
-            serverSocket.setEnabledProtocols(TLS_PROT_ENF);
-            serverSocket.setEnabledCipherSuites(CIPHERSUITES);
-            // boolean needAuth = TLS_AUTH_CLI.equals("MUTUAL");
-            // serverSocket.setNeedClientAuth(needAuth);
-
-            logger.log(Level.INFO, "Server started on port {0}", MY_PORT);
-
-            while (true) {
-                SSLSocket socket = (SSLSocket) serverSocket.accept();
-                logger.info("New connection accepted");
-                var objectInputStream = new ObjectInputStream(socket.getInputStream());
-                Wrapper message = (Wrapper) objectInputStream.readObject();
-                logger.log(Level.INFO, "Received request: " + message.toString());
-                TimeoutUtils.runWithTimeout(() -> clientHandleRequest(message, socket), TIMEOUT);
+    // Server operations
+    private static void startServerLoop(SSLServerSocket serverSocket) {
+        logger.info(() -> "Server listening on port " + serverSocket.getLocalPort());
+        
+        while (!serverSocket.isClosed()) {
+            try {
+                SSLSocket clientSocket = (SSLSocket) serverSocket.accept();
+                handleClientConnection(clientSocket);
+            } catch (IOException e) {
+                logger.log(Level.WARNING, "Error accepting client connection", e);
             }
-
-        } catch (IOException | ClassNotFoundException | KeyManagementException | KeyStoreException | NoSuchAlgorithmException | UnrecoverableKeyException | CertificateException | TimeoutException e) {
-            logger.warning(e.getMessage());
-            e.printStackTrace();
         }
     }
 
-    private static void clientHandleRequest(Wrapper request, SSLSocket clientSocket) {
+   private static void handleClientConnection(SSLSocket clientSocket) {
         try {
-            // Add the client socket to the map
-            clientSocketMap.put(request.getMessageId(), clientSocket);
+            logger.info(() -> "New client connection from: " + clientSocket.getRemoteSocketAddress());
+            clientSocket.startHandshake();
 
-            SSLSocket socket = initTLSClientSocket(chooseModule(request));
+            TimeoutUtils.runWithTimeout(() -> {
+                try (ObjectInputStream ois = new ObjectInputStream(clientSocket.getInputStream())) {
+                    Wrapper request = (Wrapper) ois.readObject();
+                    processClientRequest(clientSocket, request);
+                } catch (IOException | ClassNotFoundException e) {
+                    logger.log(Level.WARNING, "Error processing client request", e);
+                    throw new CompletionException("Request handling failed", e);
+                }
 
-            // Forward the request to the correct socket
-            logger.info("Forwarding request to " + chooseModule(request));
-            ObjectOutputStream objectOutputStream = new ObjectOutputStream(socket.getOutputStream());
-            objectOutputStream.writeObject(request);
-            objectOutputStream.flush();
+            }, REQUEST_TIMEOUT);
+            
+        } catch (TimeoutException e) {
+            logger.warning("Request processing timed out");
+            sendErrorResponse(clientSocket, 504, "Gateway Timeout");
+        } catch (CompletionException e) {
+            logger.log(Level.WARNING, "Failed to process client request", e.getCause());
+            sendErrorResponse(clientSocket, 500, "Internal Server Error");
+        } catch (IOException e) {
+            logger.log(Level.WARNING, "Unexpected error handling client connection", e);
+        } finally {
+            closeSocketSilently(clientSocket);
+            logger.info("Client connection closed");
+        }
+        }
 
-            // Get the response from the correct socket
-            logger.info("Waiting for response from " + chooseModule(request));
-            ObjectInputStream objectInputStream = new ObjectInputStream(socket.getInputStream());
-            Wrapper response = (Wrapper) objectInputStream.readObject();
+        private static void sendErrorResponse(SSLSocket socket, int errorCode, String message) {
+        try (ObjectOutputStream oos = new ObjectOutputStream(socket.getOutputStream())) {
+            oos.writeObject(new Wrapper((byte) errorCode, message.getBytes(), UUID.randomUUID()));
+        } catch (IOException e) {
+            logger.log(Level.FINE, "Failed to send error response", e);
+        }
+        }
 
-            // Handle the response
-            handleResponse(response);
-        } catch (IOException | ClassNotFoundException e) {
-            logger.info(e.getMessage());
+    private static void processClientRequest(SSLSocket clientSocket, Wrapper request) {
+        try {
+            ModuleName targetModule = resolveTargetModule(request);
+            logger.info(() -> String.format("Routing request %s to %s", request.getMessageId(), targetModule));
+            
+            try (SSLSocket moduleSocket = createModuleSocket(targetModule)) {
+                forwardRequestToModule(request, moduleSocket);
+                Wrapper response = receiveModuleResponse(moduleSocket);
+                forwardResponseToClient(clientSocket, response);
+            }
+        } catch (Exception e) {
+            logger.log(Level.WARNING, "Request processing failed", e);
+            throw new RuntimeException("Request processing error", e);
         }
     }
 
-    private static ModuleName chooseModule(Wrapper request) {
-        byte type = request.getMessageType();
+    // Network operations
+    private static SSLSocket createModuleSocket(ModuleName module) throws IOException, GeneralSecurityException {
+        String[] address = getModuleAddress(module);
+        SSLContext sslContext = createSSLContext();
+        
+        SSLSocket socket = (SSLSocket) sslContext.getSocketFactory()
+                .createSocket(address[0], Integer.parseInt(address[1]));
+        
+        socket.setEnabledProtocols(getEnabledProtocols());
+        socket.setEnabledCipherSuites(getCipherSuites());
+        socket.startHandshake();
+        return socket;
+    }
 
-        // Choose the correct socket based on the message type
-        return switch (type) {
+    private static void forwardRequestToModule(Wrapper request, SSLSocket moduleSocket) throws IOException {
+        try (ObjectOutputStream oos = new ObjectOutputStream(moduleSocket.getOutputStream())) {
+            oos.writeObject(request);
+        }
+    }
+
+    private static Wrapper receiveModuleResponse(SSLSocket moduleSocket) throws IOException, ClassNotFoundException {
+        try (ObjectInputStream ois = new ObjectInputStream(moduleSocket.getInputStream())) {
+            return (Wrapper) ois.readObject();
+        }
+    }
+
+    private static void forwardResponseToClient(SSLSocket clientSocket, Wrapper response) throws IOException {
+        try (ObjectOutputStream oos = new ObjectOutputStream(clientSocket.getOutputStream())) {
+            oos.writeObject(response);
+        }
+    }
+
+    // Configuration getters
+    private static String[] getEnabledProtocols() {
+        return properties.getProperty("TLS-PROT-ENF", "TLSv1.2").split(",");
+    }
+
+    private static String[] getCipherSuites() {
+        return properties.getProperty("CIPHERSUITES", "").split(",");
+    }
+
+    private static boolean needsClientAuth() {
+        return "MUTUAL".equalsIgnoreCase(properties.getProperty("TLS-AUTH-SRV", "NONE"));
+    }
+
+    private static char[] getKeystorePassword() {
+        return "dispatcher_password".toCharArray();
+    }
+
+    private static char[] getTruststorePassword() {
+        return "dispatcher_truststore_password".toCharArray();
+    }
+
+    private static String getTlsVersion() {
+        return properties.getProperty("TLS_VERSION", "TLSv1.2");
+    }
+
+    // Utility methods
+    private static ModuleName resolveTargetModule(Wrapper request) {
+        return switch (request.getMessageType()) {
             case 0, 1 -> ModuleName.AUTHENTICATION;
             case 3 -> ModuleName.ACCESS_CONTROL;
             case 6 -> ModuleName.STORAGE;
-            default -> {
-                System.out.println("Invalid message type: " + type);
-                yield null;
-            }
+            default -> throw new IllegalArgumentException("Invalid message type: " + request.getMessageType());
         };
     }
 
-    private static void handleResponse(Wrapper response) {
+    private static String[] getModuleAddress(ModuleName module) {
+        return switch (module) {
+            case STORAGE -> new String[]{"172.17.0.1", "8083"};
+            case AUTHENTICATION -> new String[]{"172.17.0.1", "8081"};
+            case ACCESS_CONTROL -> new String[]{"172.17.0.1", "8082"};
+        };
+    }
+
+    private static void closeSocketSilently(SSLSocket socket) {
         try {
-            // Get the client socket for this response
-            SSLSocket clientSocket = clientSocketMap.get(response.getMessageId());
-            if (clientSocket == null) {
-                // Handle the case where there's no client socket for this response
-                System.out.println("No client socket for response: " + response);
-                return;
+            if (socket != null && !socket.isClosed()) {
+                socket.close();
             }
-            // Send the response back to the client
-            ObjectOutputStream clientOutputStream = new ObjectOutputStream(clientSocket.getOutputStream());
-            clientOutputStream.writeObject(response);
-            clientOutputStream.flush();
         } catch (IOException e) {
-            e.printStackTrace();
+            logger.log(Level.FINEST, "Error closing socket", e);
         }
     }
-
-    private static SSLSocket initTLSClientSocket(ModuleName module) {
-        SSLSocket socket = null;
-        try {
-            String[] hostAndPort = getHostAndPort(module);
-
-            // KeyStore
-            System.out.println("Loading keystore...");
-            KeyStore ks = KeyStore.getInstance("JKS");
-            ks.load(new FileInputStream(KEYSTORE_PATH), KEYSTORE_PASSWORD.toCharArray());
-            KeyManagerFactory kmf = KeyManagerFactory.getInstance("SunX509");
-            kmf.init(ks, KEYSTORE_PASSWORD.toCharArray());
-
-            // TrustStore
-            System.out.println("Loading truststore...");
-            KeyStore trustStore = KeyStore.getInstance("JKS");
-            trustStore.load(new FileInputStream(TRUSTSTORE_PATH), TRUSTSTORE_PASSWORD.toCharArray());
-            TrustManagerFactory trustManagerFactory = TrustManagerFactory
-                    .getInstance(TrustManagerFactory.getDefaultAlgorithm());
-            trustManagerFactory.init(trustStore);
-
-            // Set up the SSLContext
-            System.out.println("Setting up SSL context...");
-            SSLContext sslContext = SSLContext.getInstance(TLS_VERSION);
-            sslContext.init(kmf.getKeyManagers(), trustManagerFactory.getTrustManagers(), new SecureRandom());
-            SSLSocketFactory sslSocketFactory = sslContext.getSocketFactory();
-
-            // Set up the socket to use TLSv1.2
-            System.out.println("Setting up socket...");
-            socket = (SSLSocket) sslSocketFactory.createSocket(hostAndPort[0], Integer.parseInt(hostAndPort[1]));
-            socket.setEnabledProtocols(TLS_PROT_ENF);
-            socket.setEnabledCipherSuites(CIPHERSUITES);
-            boolean needAuth = TLS_AUTH_SRV.equals("MUTUAL");
-            socket.setNeedClientAuth(needAuth);
-
-            // Start the handshake
-            System.out.println("Starting handshake...");
-            socket.startHandshake();
-
-            return socket;
-
-        } catch (IOException | KeyStoreException | NoSuchAlgorithmException | CertificateException
-                | KeyManagementException | UnrecoverableKeyException e) {
-            logger.warning(e.getMessage());
-            e.printStackTrace();
-        }
-        return null;
-    }
-
 }

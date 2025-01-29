@@ -1,9 +1,13 @@
 package dmsrosa.kerberosfs;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.security.InvalidAlgorithmParameterException;
 import java.security.KeyFactory;
 import java.security.KeyManagementException;
 import java.security.KeyPair;
@@ -29,6 +33,7 @@ import javax.net.ssl.TrustManagerFactory;
 
 import dmsrosa.kerberosfs.commands.Command;
 import dmsrosa.kerberosfs.commands.CommandTypes;
+import dmsrosa.kerberosfs.crypto.CryptoException;
 import dmsrosa.kerberosfs.crypto.CryptoStuff;
 import dmsrosa.kerberosfs.handlers.AuthHandler;
 import dmsrosa.kerberosfs.handlers.ServiceHandler;
@@ -46,11 +51,14 @@ public class ClientController {
     private final TGSHandler tgshandler;
     private final ServiceHandler serviceHandler;
     private final AuthHandler authHandler;
+    private SSLSocket  socket;
+
 
     public ClientController() {
         this.tgshandler = new TGSHandler();
         this.serviceHandler = new ServiceHandler();
         this.authHandler = new AuthHandler();
+        this.socket = initTLSSocket();
     }
 
     public CommandTypes validateCommand(String[] parts) throws RuntimeException {
@@ -70,23 +78,6 @@ public class ClientController {
 
         return commandType;
     }
-
-    @FunctionalInterface
-    public interface SupplierWithException<T> {
-        T get(SSLSocket socket) throws Exception;
-    }
-
-    private <T> T executeWithSocket(SupplierWithException<T> action) throws Exception {
-        try (SSLSocket socket = initTLSSocket()) {
-            return action.get(socket);
-        }
-    }
-
-    private void executeWithSocketVoid(ConsumerWithException<SSLSocket> action) throws Exception {
-        try (SSLSocket socket = initTLSSocket()) {
-            action.accept(socket);
-        }
-    }
     
     // Functional interface for `void` operations with exceptions
     @FunctionalInterface
@@ -100,10 +91,16 @@ public class ClientController {
         Client.usersDHKey.get(username).setDhKey(key);
         Client.usersDHKey.get(username).setKeyPassword(password);
 
-        executeWithSocketVoid(socket -> requestLogin(socket, username, password));
+        requestLogin(username, password);
     }
 
-    private void requestLogin(SSLSocket socket, String clientId, String password) throws Exception {
+    private void requestLogin(String clientId, String password) throws Exception {
+
+        if (this.socket == null || this.socket.isClosed()) {
+            this.socket = initTLSSocket();
+            this.socket.setKeepAlive(true);
+        }
+
         authHandler.sendAuthRequest(socket, clientId);
         Client.usersDHKey.get(clientId).setTGT(authHandler.processAuthResponse(socket, clientId, password));
     }
@@ -123,21 +120,20 @@ public class ClientController {
     
         Client.logger.log(Level.INFO, "Executing command");
     
-        return executeWithSocket(socket -> {
-            Command command = pair.second;
+        Command command = pair.second;
+        String clientId = command.getUsername();
     
-            // Request SGT from TGS
-            ResponseTGSMessage sgt = requestServiceTicketFromTGS(socket, command, fullCommand[1]);
+        Authenticator authenticator = new Authenticator(clientId, Client.CLIENT_ADDR, command);
+        byte[] authenticatorSerialized = RandomUtils.serialize(authenticator);
     
-            // Establish a service connection and send the request
-            serviceHandler.sendServiceRequest(socket, command, sgt);
+        reconnectIfNeeded(); // Ensure the socket is valid
+        ResponseTGSMessage sgt = requestServiceTicketFromTGS(socket, command, clientId, authenticatorSerialized);
     
-            // Wait for the server response and process it
-            ResponseServiceMessage response = serviceHandler.processServiceResponse(socket, sgt);
+        reconnectIfNeeded(); // Ensure the socket is valid
+        ResponseServiceMessage response = requestCommandFromService(socket, command, clientId, sgt, authenticatorSerialized);
     
-            return Arrays.toString(response.getcommandReturn().getPayload());
-        });
-    }    
+        return Arrays.toString(response.getcommandReturn().getPayload());
+    }
 
 
     private Pair<CommandTypes, Command> validateAndSetupCommand(String[] fullCommand, FilePayload filePayload) throws Exception {
@@ -156,18 +152,59 @@ public class ClientController {
         return new Pair<>(commandType, command);
     }
 
-    private ResponseTGSMessage requestServiceTicketFromTGS(SSLSocket socket, Command command, String clientId) throws Exception {
-        Client.logger.log(Level.INFO, "Requesting SGT for client {0} with command {1}", new Object[]{clientId, command.getCommand()});
+    private ResponseServiceMessage requestCommandFromService(SSLSocket socket, Command command, String clientId, ResponseTGSMessage sgt, byte[] authenticatorSerialized){
+        Client.logger.log(Level.INFO, "Requesting service for client " + clientId + "with command " + command.getCommand());
+        
+        ResponseServiceMessage response = null;
+        
+        try {
+            byte[] encryptedAuthenticator = null;
+            reconnectIfNeeded(); // Ensure the socket is valid
+    
+            encryptedAuthenticator = CryptoStuff.getInstance().encrypt(
+                    sgt.getSessionKey(),
+                    RandomUtils.serialize(authenticatorSerialized));
+    
+            serviceHandler.sendServiceRequest(socket, sgt, encryptedAuthenticator, command);
+            Client.logger.severe("Waiting Storage response");
+            response = serviceHandler.processServiceResponse(socket, sgt);
+            Client.logger.info("Finished processing Storage response");
+        } catch (IOException e) {
+            Client.logger.warning("Socket error: " + e.getMessage());
+            this.socket = null; // Force reconnection on next attempt
+            throw new RuntimeException("Socket error. Reconnecting...", e);
+        } catch (CryptoException | InvalidAlgorithmParameterException ex) {
+            Client.logger.warning(ex.getMessage());
+            return null;
+        }
 
-        Authenticator authenticator = new Authenticator(clientId, Client.CLIENT_ADDR, command);
-        byte[] authenticatorSerialized = RandomUtils.serialize(authenticator);
+        return response;
+    }
 
-        ResponseAuthenticationMessage tgt = Client.usersDHKey.get(clientId).getTGT();
-        tgshandler.sendTGSRequest(socket, tgt.getEncryptedTGT(),
-                CryptoStuff.getInstance().encrypt(tgt.getGeneratedKey(), authenticatorSerialized),
-                command);
-
-        ResponseTGSMessage sgt = tgshandler.processTGSResponse(socket, tgt.getGeneratedKey());
+    private ResponseTGSMessage requestServiceTicketFromTGS(SSLSocket socket, Command command, String clientId, byte[] authenticatorSerialized) {
+        Client.logger.log(Level.INFO, "Requesting SGT for client " + clientId + "with command " + command.getCommand());
+        
+        ResponseTGSMessage sgt = null;
+    
+        try {
+            reconnectIfNeeded(); // Ensure the socket is valid
+    
+            ResponseAuthenticationMessage tgt = Client.usersDHKey.get(clientId).getTGT();
+            tgshandler.sendTGSRequest(socket, tgt.getEncryptedTGT(), CryptoStuff.getInstance().encrypt(tgt.getGeneratedKey(), authenticatorSerialized));
+    
+            Client.logger.severe("Processing TGS response");
+            sgt = tgshandler.processTGSResponse(socket, tgt.getGeneratedKey());
+            Client.logger.info("Finished processing TGS response");
+    
+        } catch (IOException e) {
+            Client.logger.warning("Socket error: " + e.getMessage());
+            this.socket = null; // Force reconnection on next attempt
+            throw new RuntimeException("Socket error. Reconnecting...", e);
+        } catch (Exception ex) {
+            Client.logger.warning(ex.getMessage());
+            return null;
+        }
+    
         Client.usersDHKey.get(clientId).addSGT(command.getCommand(), sgt);
         return sgt;
     }
@@ -178,8 +215,41 @@ public class ClientController {
     }
 
     private Command createCommandForPut(String[] fullCommand, String clientId, FilePayload filePayload) {
-        return new Command(fullCommand[0], clientId, filePayload, fullCommand[2]);
+        // Validate the local file path
+        String localFilePath = fullCommand[2];  // Local file path
+        File file = new File(localFilePath);
+        if (!file.exists() || !file.isFile()) {
+            throw new RuntimeException("Local file does not exist: " + localFilePath);
+        }
+
+        // Read the file content as a byte array
+        byte[] fileContent = null;
+        try {
+            fileContent = Files.readAllBytes(file.toPath());
+        } catch (IOException ex) {
+        }
+
+        // Create the file metadata (example: name, size, and last modified time)
+        String fileName = file.getName();
+        long fileSize = file.length();
+        long lastModified = file.lastModified();
+
+        // Construct the metadata (you can expand this as needed)
+        byte[] metaData = createFileMetaData(fileName, fileSize, lastModified);
+
+        // Create the FilePayload with both metadata and file content
+        filePayload = new FilePayload(metaData, fileContent);
+
+        // Return the Command object with the remote path, clientId, and the FilePayload
+        return new Command(fullCommand[0], clientId, filePayload, fullCommand[1]);  // remote path + file payload
     }
+
+    private byte[] createFileMetaData(String fileName, long fileSize, long lastModified) {
+        // Example metadata structure: file name, size, and last modified time
+        String metaDataString = "FileName: " + fileName + ", Size: " + fileSize + ", LastModified: " + lastModified;
+        return metaDataString.getBytes(StandardCharsets.UTF_8);
+    }
+
 
     private Command createCommandForGetRmFile(String[] fullCommand, String clientId) {
         return new Command(fullCommand[0], clientId, fullCommand[2]);
@@ -237,7 +307,7 @@ public class ClientController {
     
 
     private SecretKey performDHKeyExchange() {
-        try (SSLSocket socket = initTLSSocket()) {
+        try {
             if (socket == null || !socket.isConnected()) {
                 Client.logger.warning("Socket not connected");
                 return null;
@@ -276,5 +346,26 @@ public class ClientController {
             return null; // Ensure to handle this in the calling code
         }
     }
+
+    private void reconnectIfNeeded() throws IOException {
+    int maxRetries = 3;
+    int retryCount = 0;
+
+    while (retryCount < maxRetries) {
+        if (this.socket == null || this.socket.isClosed()) {
+            Client.logger.info("Socket is closed or null. Reconnecting... Attempt " + (retryCount + 1));
+            this.socket = initTLSSocket();
+            if (this.socket != null) {
+                this.socket.setKeepAlive(true); // Enable keep-alive
+                return; // Successfully reconnected
+            }
+            retryCount++;
+        } else {
+            return; // Socket is already valid
+        }
+    }
+
+    throw new IOException("Failed to reconnect after " + maxRetries + " attempts.");
+}
     
 }

@@ -45,7 +45,7 @@ class ClientUI {
         commandInput = new JTextField();
         commandInput.setBackground(Color.LIGHT_GRAY);
         commandInput.setForeground(Color.BLACK);
-        commandInput.setFont(new Font("Monospaced", Font.BOLD, 17));
+        commandInput.setFont(new Font("Monospaced", Font.BOLD, 18));
         commandInput.addActionListener(new SubmitCommandListener());
 
         mainPanel.add(commandInput, BorderLayout.SOUTH);
