@@ -148,7 +148,6 @@ public class MainDispatcher {
                     logger.log(Level.WARNING, "Error processing client request", e);
                     throw new CompletionException("Request handling failed", e);
                 }
-
             }, REQUEST_TIMEOUT);
             
         } catch (TimeoutException e) {
@@ -182,8 +181,10 @@ public class MainDispatcher {
                 forwardRequestToModule(request, moduleSocket);
                 Wrapper response = receiveModuleResponse(moduleSocket);
                 forwardResponseToClient(clientSocket, response);
+            } catch (GeneralSecurityException ex) {
+                logger.log(Level.WARNING, "Error fowarding message", ex);
             }
-        } catch (Exception e) {
+        } catch (IOException | ClassNotFoundException e) {
             logger.log(Level.WARNING, "Request processing failed", e);
             throw new RuntimeException("Request processing error", e);
         }
@@ -235,11 +236,11 @@ public class MainDispatcher {
     }
 
     private static char[] getKeystorePassword() {
-        return "dispatcher_password".toCharArray();
+        return "dbrCOv9mnfR22RqlM6HbmA==".toCharArray();
     }
 
     private static char[] getTruststorePassword() {
-        return "dispatcher_truststore_password".toCharArray();
+        return "Eod62hGNQNLEgqTIadv93w==".toCharArray();
     }
 
     private static String getTlsVersion() {

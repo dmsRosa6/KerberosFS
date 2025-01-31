@@ -16,6 +16,7 @@ import java.security.KeyStore;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.PublicKey;
+import java.security.SecureRandom;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Arrays;
@@ -36,9 +37,11 @@ import javax.crypto.KeyAgreement;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
+import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLSocket;
+import javax.net.ssl.TrustManagerFactory;
 
 import dmsrosa.kerberosfs.crypto.CryptoException;
 import dmsrosa.kerberosfs.crypto.CryptoStuff;
@@ -52,28 +55,30 @@ public class AuthenticationService {
     private static final Logger logger = Logger.getLogger(AuthenticationService.class.getName());
     
     // Configuration constants
-    private static final String TLS_VERSION = "TLSv1.2";
     private static final String KEYSTORE_PATH = "/app/keystore.jks";
     private static final String TRUSTSTORE_PATH = "/app/truststore.jks";
     private static final String CRYPTO_CONFIG_PATH = "/app/crypto-config.properties";
+    private static final String TLS_CONFIG_PATH = "/app/tls-config.properties";
     private static final int SERVICE_PORT = 8081;
-    private static final long REQUEST_TIMEOUT = 10000;
     private static final String TGS_KEY_ID = "TGS_AS_KEY";
     
     // Cryptographic constants
     private static final String DH_ALGORITHM = "DH";
     private static final String SYM_ALGORITHM = "AES";
-    private static final int KEY_SIZE = 256;
     private static final int DH_KEY_SIZE = 2048;
     
     private static SecretKey tgsKey;
     private static final Map<String, SecretKey> clientKeys = new ConcurrentHashMap<>();
     private static SSLContext sslContext;
 
+    private static final Properties tlsConfig;
+    private static final Properties cryptoConfig;
+
     static {
         configureLogger();
-        loadCryptoConfig();
         initializeSSLContext();
+        cryptoConfig = loadCryptoConfig();
+        tlsConfig = loadTLSConfig();
     }
 
     public static void main(String[] args) {
@@ -81,7 +86,7 @@ public class AuthenticationService {
             logger.info("Authentication service started on port " + SERVICE_PORT);
             acceptConnections(serverSocket);
         } catch (Exception e) {
-            logger.log(Level.SEVERE, "Failed to start authentication service", e);
+            logger.log(Level.SEVERE, "Failed to start authentication service", e.getMessage());
             System.exit(1);
         }
     }
@@ -98,13 +103,25 @@ public class AuthenticationService {
         logger.setLevel(Level.INFO);
     }
 
-    private static void loadCryptoConfig() {
+    private static Properties loadTLSConfig() {
+        Properties props = new Properties();
+        try (InputStream input = new FileInputStream(TLS_CONFIG_PATH)) {
+            props.load(input);
+            logger.info("Loaded TLS config successfully");
+            return props;
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to load TLS config", e);
+        }
+    }
+
+    private static Properties loadCryptoConfig() {
         Properties props = new Properties();
         try (InputStream input = new FileInputStream(CRYPTO_CONFIG_PATH)) {
             props.load(input);
             tgsKey = CryptoStuff.getInstance().convertStringToSecretKey(
                 props.getProperty(TGS_KEY_ID, ""));
-            logger.info("Loaded TGS key successfully");
+            logger.info("Loaded Crypto config successfully");
+            return props;
         } catch (IOException e) {
             throw new RuntimeException("Failed to load crypto config", e);
         }
@@ -115,12 +132,25 @@ public class AuthenticationService {
             logger.info("Loading keystore from: " + KEYSTORE_PATH);
             KeyStore ks = loadKeyStore();
             logger.info("Keystore contains " + ks.size() + " entries");
-    
+
             logger.info("Loading truststore from: " + TRUSTSTORE_PATH);
             KeyStore ts = loadTrustStore();
             logger.info("Truststore contains " + ts.size() + " entries");
-    
-            // Rest of initialization
+
+            // Initialize KeyManagerFactory
+            KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+            kmf.init(ks, getKeystorePassword());
+
+            // Initialize TrustManagerFactory
+            TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init(ts);
+
+            // Initialize SSLContext
+            sslContext = SSLContext.getInstance("TLSv1.2");
+            sslContext.init(kmf.getKeyManagers(), tmf.getTrustManagers(), new SecureRandom());
+
+            logger.info("SSL Context successfully initialized.");
+
         } catch (IOException | GeneralSecurityException e) {
             logger.log(Level.SEVERE, "SSL Context Initialization Failed", e);
             throw new RuntimeException(e);
@@ -129,6 +159,7 @@ public class AuthenticationService {
 
     // Server operations
     private static SSLServerSocket createServerSocket() throws IOException {
+
         SSLServerSocket serverSocket = (SSLServerSocket) sslContext.getServerSocketFactory()
             .createServerSocket(SERVICE_PORT);
         
@@ -336,23 +367,26 @@ public class AuthenticationService {
 
     // Configuration getters
     private static String[] getTlsProtocols() {
-        return System.getProperty("TLS-PROT-ENF", "TLSv1.2").split(",");
+        String protocols = tlsConfig.getProperty("TLS-PROT-ENF", "TLSv1.2");
+        return protocols.split(",");
     }
 
     private static String[] getCipherSuites() {
-        return System.getProperty("CIPHERSUITES", "").split(",");
+        String ciphers = tlsConfig.getProperty("CIPHERSUITES", "");
+        return ciphers.isEmpty() ? new String[0] : ciphers.split(",");
     }
 
     private static boolean needsClientAuth() {
-        return "MUTUAL".equalsIgnoreCase(System.getProperty("TLS-AUTH", "NONE"));
+        return "MUTUAL".equalsIgnoreCase(tlsConfig.getProperty("TLS-AUTH", "NONE"));
     }
 
+
     private static char[] getKeystorePassword() {
-        return "authentication_password".toCharArray();
+        return "UXwE2u1raTW3rlPcSEbmFA==".toCharArray();
     }
 
     private static char[] getTruststorePassword() {
-        return "authentication_truststore_password".toCharArray();
+        return "E4kLV4p5AGvc2w+EtUoWfA==".toCharArray();
     }
 
     // Log formatter

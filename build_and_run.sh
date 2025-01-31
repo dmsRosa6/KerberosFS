@@ -8,6 +8,21 @@ handle_error() {
     fi
 }
 
+# Define paths
+CERTS_SOURCE="Certificates"
+SERVICES_DIR=("storage" "access-control" "auth-service" "dispatcher")
+services=("KerberosFSStorage" "KerberosFSAccessControl" "KerberosFSAuth" "KerberosFSDispatcher")
+
+# Copy certificates to the respective services before building
+echo "Copying certificates to service directories..."
+for i in "${!SERVICES_DIR[@]}"; do
+    service_src=${SERVICES_DIR[$i]}
+    service_dest=${services[$i]}
+    mkdir -p "$service_dest/src/main/resources/"
+    cp -r "$CERTS_SOURCE/$service_src/"* "$service_dest/src/main/resources/"
+    handle_error "Failed to copy certificates for $service_dest."
+done
+
 # Clean up old containers and images
 echo "Removing all Docker containers..."
 docker ps -a -q | xargs -r docker rm -f
@@ -17,12 +32,12 @@ echo "Removing all Docker images..."
 docker images -q | xargs -r docker rmi -f
 handle_error "Failed to remove images."
 
-#Install common
-echo "Install Common..."
+# Install common dependencies
+echo "Installing CommonUtils..."
 (cd CommonUtils && mvn clean install)
+handle_error "Failed to install CommonUtils."
 
 # Build Maven projects
-services=("KerberosFSDispatcher" "KerberosFSAccessControl" "KerberosFSAuth" "KerberosFSStorage" "KerberosFSClient")
 
 for service in "${services[@]}"; do
     echo "Building $service..."
@@ -53,7 +68,8 @@ docker network ls | grep -q $network_name || docker network create $network_name
 handle_error "Failed to create network: $network_name."
 
 # Connect containers to the network dynamically
-services_to_connect=("kerberosfs-auth-service" "kerberosfs-access-control-service" "kerberosfs-storage-service" "kerberosfs-dispatcher")
+services_to_connect=("kerberosfs-auth-service" "kerberosfs-access-control-service" "kerberosfs-storage-service" "kerberosfs-dispatcher-service")
+
 for service in "${services_to_connect[@]}"; do
     container_name=$(docker ps --filter "name=$service" --format "{{.Names}}" | head -n 1)
     if [ -n "$container_name" ]; then

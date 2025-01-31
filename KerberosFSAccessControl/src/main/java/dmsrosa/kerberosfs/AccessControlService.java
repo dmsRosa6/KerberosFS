@@ -1,7 +1,5 @@
 package dmsrosa.kerberosfs;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.ObjectInputStream;
@@ -43,6 +41,7 @@ import dmsrosa.kerberosfs.messages.ResponseTGSMessage;
 import dmsrosa.kerberosfs.messages.ServiceGrantingTicket;
 import dmsrosa.kerberosfs.messages.TicketGrantingTicket;
 import dmsrosa.kerberosfs.messages.Wrapper;
+import dmsrosa.kerberosfs.utils.RandomUtils;
 import dmsrosa.kerberosfs.utils.TimeoutUtils;
 
 public class AccessControlService {
@@ -192,7 +191,7 @@ public class AccessControlService {
                 System.out.println("Received message: " + wrapper);
                 
                 // deserialize request message
-                RequestTGSMessage requestTGSMessage = (RequestTGSMessage) deserializeObject(wrapper.getMessage());
+                RequestTGSMessage requestTGSMessage = (RequestTGSMessage) RandomUtils.deserialize(wrapper.getMessage());
                 
                 String serviceId = requestTGSMessage.getServiceId();
                 byte[] tgtSerialized = requestTGSMessage.getEncryptedTGT();
@@ -200,12 +199,12 @@ public class AccessControlService {
                 
                 // decrypt and deserialize TGT
                 tgtSerialized = CryptoStuff.getInstance().decrypt(tgsKey, tgtSerialized);
-                TicketGrantingTicket tgt = (TicketGrantingTicket) deserializeObject(tgtSerialized);
+                TicketGrantingTicket tgt = (TicketGrantingTicket) RandomUtils.deserialize(tgtSerialized);
                 SecretKey keyClientTGS = tgt.getKey();
                 
                 // decrypt and deserialize authenticator
                 authenticatorSerialized = CryptoStuff.getInstance().decrypt(keyClientTGS, authenticatorSerialized);
-                Authenticator authenticator = (Authenticator) deserializeObject(authenticatorSerialized);
+                Authenticator authenticator = (Authenticator) RandomUtils.deserialize(authenticatorSerialized);
                 
                 // check if authenticator is valid
                 if (!authenticator.isValid(tgt.getClientId(), tgt.getClientAddress())) {
@@ -255,11 +254,11 @@ public class AccessControlService {
                 LocalDateTime issueTime = sgt.getIssueTime();
                 
                 // serialize the ticket and encrypt it
-                byte[] sgtSerialized = serializeObject(sgt);
+                byte[] sgtSerialized = RandomUtils.serialize(sgt);
                 sgtSerialized = CryptoStuff.getInstance().encrypt(storageKey, sgtSerialized);
                 
                 // serialize and encrypt message
-                byte[] msgSerialized = serializeObject(
+                byte[] msgSerialized = RandomUtils.serialize(
                         new ResponseTGSMessage(generatedkey, serviceId, issueTime, sgtSerialized));
                 msgSerialized = CryptoStuff.getInstance().encrypt(keyClientTGS, msgSerialized);
                 
@@ -281,31 +280,25 @@ public class AccessControlService {
         }
     }
 
-    /* ---- Auxiliary methods ---- */
-
-    private static byte[] serializeObject(Object object) {
-        try {
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            ObjectOutputStream oos = new ObjectOutputStream(bos);
-            oos.writeObject(object);
-            byte[] serializedObject = bos.toByteArray();
-            return serializedObject;
-        } catch (IOException e) {
-            e.printStackTrace();
+        // Configuration getters
+        private static String[] getTlsProtocols() {
+            return System.getProperty("TLS-PROT-ENF", "TLSv1.2").split(",");
         }
-        return null;
-    }
-
-    private static Object deserializeObject(byte[] serializedObject) {
-        try {
-            ByteArrayInputStream bis = new ByteArrayInputStream(serializedObject);
-            ObjectInputStream ois = new ObjectInputStream(bis);
-            Object object = ois.readObject();
-            return object;
-        } catch (IOException | ClassNotFoundException e) {
-            e.printStackTrace();
+    
+        private static String[] getCipherSuites() {
+            return System.getProperty("CIPHERSUITES", "").split(",");
         }
-        return null;
-    }
+    
+        private static boolean needsClientAuth() {
+            return "MUTUAL".equalsIgnoreCase(System.getProperty("TLS-AUTH", "NONE"));
+        }
+    
+        private static char[] getKeystorePassword() {
+            return "UXwE2u1raTW3rlPcSEbmFA==".toCharArray();
+        }
+    
+        private static char[] getTruststorePassword() {
+            return "E4kLV4p5AGvc2w==".toCharArray();
+        }
 
 }
