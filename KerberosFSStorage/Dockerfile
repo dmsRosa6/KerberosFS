@@ -15,7 +15,6 @@ COPY src/main/resources/tls-config.properties tls-config.properties
 
 COPY src/main/resources/keystore.jks keystore.jks
 COPY src/main/resources/truststore.jks truststore.jks
-COPY src/main/resources/storage.cer storage.cer
 
 EXPOSE 8083
 

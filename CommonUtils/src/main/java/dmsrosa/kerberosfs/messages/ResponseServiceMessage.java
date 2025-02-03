@@ -14,7 +14,7 @@ public class ResponseServiceMessage implements java.io.Serializable {
         this.commandReturn = commandReturn;
     }
     
-    public CommandReturn getcommandReturn() {
+    public CommandReturn getCommandReturn() {
         return commandReturn;
     }
 

@@ -17,7 +17,7 @@ import javax.crypto.spec.SecretKeySpec;
 public class AccessInstaller {
 
     private static final String LOCAL_ENCRYPTION_KEY = "LwSIXXbm75btRD3zEDPkWFueMZUxnVxO";
-    private static final String RESOURCE_FILE_PATH = "access.conf"; // File in resources
+    private static final String RESOURCE_FILE_PATH = "KerberosFSAccessControl/src/main/resources/access.conf"; // File in resources
 
     // Add a new user's permission and save to the file
     public static void addPermission(String username, String permission) {
@@ -66,7 +66,7 @@ public class AccessInstaller {
             Path resourceFilePath = Paths.get(RESOURCE_FILE_PATH);
             Files.write(resourceFilePath, encryptedContent);
             System.out.println("Access file initialized successfully.");
-        } catch (Exception e) {
+        } catch (IOException | IllegalArgumentException | InvalidKeyException | NoSuchAlgorithmException | BadPaddingException | IllegalBlockSizeException | NoSuchPaddingException e) {
             System.err.println("Failed to initialize access file: " + e.getMessage());
         }
     }

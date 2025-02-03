@@ -28,7 +28,7 @@ public class AccessControl {
         if (Files.exists(Paths.get(ACCESSES_FILE_PATH))) {
             loadPermissions();
         } else {
-            System.err.println("Access file not found: " + ACCESSES_FILE_PATH);
+            System.err.println("User permissions file not found: " + ACCESSES_FILE_PATH);
         }
     }
 
