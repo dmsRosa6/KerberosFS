@@ -22,14 +22,12 @@ public class Client {
         try {
             Logger rootLogger = Logger.getLogger("");
             Handler[] handlers = rootLogger.getHandlers();
-            if (handlers[0] instanceof ConsoleHandler) {
+            if (handlers.length > 0 && handlers[0] instanceof ConsoleHandler) {
                 rootLogger.removeHandler(handlers[0]);
             }
-
             ConsoleHandler handler = new ConsoleHandler();
             handler.setFormatter(new SimpleFormatter() {
                 private static final String format = "[%1$tT,%1$tL] [%2$-7s] [%3$s]: %4$s %n";
-
                 @Override
                 public synchronized String format(LogRecord lr) {
                     return String.format(format,
@@ -45,7 +43,7 @@ public class Client {
         }
     }
 
-
+    // Client TLS/SSL configuration constants
     public static final String KEYSTORE_TYPE = "JKS";
     public static final String KEYSTORE_PASSWORD = "client_password";
     public static final String KEYSTORE_PATH = "/keystore.jks";
@@ -55,34 +53,29 @@ public class Client {
     public static final String TLS_VERSION = "TLSv1.2";
     public static final String DISPATCHER_HOST = "localhost";
     public static final int DISPATCHER_PORT = 8080;
-
+    
     public static final String CLIENT_ADDR = "127.0.0.1";
     public static final String TGS_ID = "access_control";
     public static final String SERVICE_ID = "storage_service";
-
     
     public static final long TIMEOUT = 60000;
 
     private static final Properties properties = new Properties();
-
     static {
-        try (InputStream input = Client.class.getClassLoader()
-                .getResourceAsStream("tls-config.properties")) {
+        try (InputStream input = Client.class.getClassLoader().getResourceAsStream("tls-config.properties")) {
             properties.load(input);
         } catch (IOException ex) {
             logger.log(Level.WARNING, ex.getMessage());
         }
     }
     
-    public static Map<String, UserInfo> usersDHKey;
+    public static Map<String, UserInfo> usersDHKey = new HashMap<>();
 
-
-    public static final String[] TLS_PROT_ENF = properties.getProperty("TLS-PROT-ENF").split(",");
-    public static final String[] CIPHERSUITES = properties.getProperty("CIPHERSUITES").split(",");
+    public static final String[] TLS_PROT_ENF = properties.getProperty("TLS-PROT-ENF", "TLSv1.2").split(",");
+    public static final String[] CIPHERSUITES = properties.getProperty("CIPHERSUITES", "").split(",");
     public static final String TLS_AUTH = properties.getProperty("TLS-AUTH");
 
     public static void main(String[] args) {
-        usersDHKey = new HashMap<>();
         SwingUtilities.invokeLater(ClientUI::new);
     }
 }

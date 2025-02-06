@@ -10,8 +10,8 @@ handle_error() {
 
 # Define paths
 CERTS_SOURCE="Certificates"
-SERVICES_DIR=("storage" "access-control" "auth-service" "dispatcher")
-services=("KerberosFSStorage" "KerberosFSAccessControl" "KerberosFSAuth" "KerberosFSDispatcher")
+SERVICES_DIR=("storage" "access-control" "auth-service" "dispatcher" "client")
+services=("KerberosFSStorage" "KerberosFSAccessControl" "KerberosFSAuth" "KerberosFSDispatcher" "KerberosFSClient")
 
 # Copy certificates to the respective services before building
 echo "Copying certificates to service directories..."
@@ -68,7 +68,7 @@ docker network ls | grep -q $network_name || docker network create $network_name
 handle_error "Failed to create network: $network_name."
 
 # Connect containers to the network dynamically
-services_to_connect=("kerberosfs-auth-service" "kerberosfs-access-control-service" "kerberosfs-storage-service" "kerberosfs-dispatcher-service")
+services_to_connect=("kerberosfs-auth-service" "kerberosfs-access-control-service" "kerberosfs-storage-service" "kerberosfs-dispatcher")
 
 for service in "${services_to_connect[@]}"; do
     container_name=$(docker ps --filter "name=$service" --format "{{.Names}}" | head -n 1)
@@ -82,5 +82,6 @@ done
 
 # Run the client application
 echo "Running the client application..."
-java -jar KerberosFSClient/target/kerberos-filesystem-client-1.0.0.jar
+cd KerberosFSClient
+#java -jar target/kerberos-filesystem-client-1.0.0.jar
 handle_error "Failed to run the client application."

@@ -86,12 +86,13 @@ public class AuthenticationService {
             logger.info("Authentication service started on port " + SERVICE_PORT);
             acceptConnections(serverSocket);
         } catch (Exception e) {
-            logger.log(Level.SEVERE, "Failed to start authentication service", e.getMessage());
+            logger.log(Level.SEVERE, "Failed to start authentication service", e);
             System.exit(1);
         }
     }
 
-    // Initialization methods
+    // ==================== Initialization Methods ====================
+
     private static void configureLogger() {
         Logger rootLogger = Logger.getLogger("");
         Arrays.stream(rootLogger.getHandlers()).forEach(rootLogger::removeHandler);
@@ -100,7 +101,7 @@ public class AuthenticationService {
         handler.setFormatter(new LogFormatter());
         handler.setLevel(Level.ALL);
         logger.addHandler(handler);
-        logger.setLevel(Level.INFO);
+        logger.setLevel(Level.FINEST);
     }
 
     private static Properties loadTLSConfig() {
@@ -110,6 +111,7 @@ public class AuthenticationService {
             logger.info("Loaded TLS config successfully");
             return props;
         } catch (IOException e) {
+            logger.log(Level.SEVERE, "Failed to load TLS config", e);
             throw new RuntimeException("Failed to load TLS config", e);
         }
     }
@@ -118,11 +120,12 @@ public class AuthenticationService {
         Properties props = new Properties();
         try (InputStream input = new FileInputStream(CRYPTO_CONFIG_PATH)) {
             props.load(input);
-            tgsKey = CryptoStuff.getInstance().convertStringToSecretKey(
-                props.getProperty(TGS_KEY_ID, ""));
+            String tgsKeyStr = props.getProperty(TGS_KEY_ID, "");
+            tgsKey = CryptoStuff.getInstance().convertStringToSecretKey(tgsKeyStr);
             logger.info("Loaded Crypto config successfully");
             return props;
         } catch (IOException e) {
+            logger.log(Level.SEVERE, "Failed to load crypto config", e);
             throw new RuntimeException("Failed to load crypto config", e);
         }
     }
@@ -157,9 +160,7 @@ public class AuthenticationService {
         }
     }
 
-    // Server operations
     private static SSLServerSocket createServerSocket() throws IOException {
-
         SSLServerSocket serverSocket = (SSLServerSocket) sslContext.getServerSocketFactory()
             .createServerSocket(SERVICE_PORT);
         
@@ -167,6 +168,8 @@ public class AuthenticationService {
         serverSocket.setEnabledCipherSuites(getCipherSuites());
         serverSocket.setNeedClientAuth(needsClientAuth());
         
+        logger.info("ServerSocket created with protocols: " + Arrays.toString(getTlsProtocols())
+                + " and ciphers: " + Arrays.toString(getCipherSuites()));
         return serverSocket;
     }
 
@@ -175,6 +178,7 @@ public class AuthenticationService {
         while (!serverSocket.isClosed()) {
             try {
                 SSLSocket clientSocket = (SSLSocket) serverSocket.accept();
+                logger.info("Accepted connection from " + clientSocket.getRemoteSocketAddress());
                 executor.submit(() -> handleClientConnection(clientSocket));
             } catch (IOException e) {
                 logger.log(Level.WARNING, "Error accepting client connection", e);
@@ -182,6 +186,8 @@ public class AuthenticationService {
         }
         executor.shutdown();
     }
+
+    // ==================== Client Connection Handling ====================
 
     private static void handleClientConnection(SSLSocket clientSocket) {
         try (clientSocket;
@@ -191,13 +197,22 @@ public class AuthenticationService {
             clientSocket.startHandshake();
             logger.info("Client connected: " + clientSocket.getRemoteSocketAddress());
 
+            // Process incoming requests until the client disconnects.
             while (!clientSocket.isClosed()) {
-                Wrapper request = (Wrapper) ois.readObject();
-                processRequest(request, oos);
+                try {
+                    Wrapper request = (Wrapper) ois.readObject();
+                    logger.fine("Received request: " + request);
+                    processRequest(request, oos);
+                } catch (EOFException e) {
+                    logger.info("Client disconnected normally");
+                    break;
+                } catch (Exception e) {
+                    logger.log(Level.SEVERE, "Error processing request", e);
+                    sendErrorResponse(oos, UUID.randomUUID(), 500, "Internal server error");
+                    break; // Optionally exit loop on error
+                }
             }
         } catch (EOFException e) {
-            logger.info("Client disconnected normally");
-        } catch (ClassNotFoundException | IOException e) {
             logger.log(Level.WARNING, "Client connection error", e);
         } catch (Exception e) {
             logger.log(Level.SEVERE, "Unexpected error handling client", e);
@@ -205,6 +220,7 @@ public class AuthenticationService {
     }
 
     private static void processRequest(Wrapper request, ObjectOutputStream oos) {
+        logger.info("Processing authentication request: " + request);
         try {
             switch (request.getMessageType()) {
                 case 0 -> handleKeyExchange(request, oos);
@@ -216,45 +232,50 @@ public class AuthenticationService {
         }
     }
 
-    // Request handlers
+    // ==================== Request Handlers ====================
+
     private static void handleKeyExchange(Wrapper request, ObjectOutputStream oos) throws IOException {
+        logger.info("Handling key exchange for request " + request.getMessageId());
         try {
             KeyPair keyPair = generateDHKeyPair();
             PublicKey clientKey = parsePublicKey(request.getMessage());
-            
+            logger.fine("Client public key parsed successfully");
+
             SecretKey sharedKey = generateSharedKey(keyPair, clientKey);
             clientKeys.put(request.getMessageId().toString(), sharedKey);
-            
-            sendResponse(oos, request.getMessageType(), 
-                keyPair.getPublic().getEncoded(), request.getMessageId());
-            
+            logger.info("Key exchange successful; shared key stored for request " + request.getMessageId());
+
+            sendResponse(oos, request.getMessageType(), keyPair.getPublic().getEncoded(), request.getMessageId());
         } catch (GeneralSecurityException e) {
-            logger.log(Level.WARNING, "Key exchange failed", e);
+            logger.log(Level.SEVERE, "Key exchange failed for request " + request.getMessageId(), e);
             sendErrorResponse(oos, request.getMessageId(), 500, "Key exchange error");
         }
     }
 
     private static void handleAuthentication(Wrapper request, ObjectOutputStream oos) throws IOException {
+        logger.info("Handling authentication for request " + request.getMessageId());
         try {
             SecretKey clientKey = clientKeys.get(request.getMessageId().toString());
             if (clientKey == null) {
+                logger.warning("No session key found for request " + request.getMessageId());
                 sendErrorResponse(oos, request.getMessageId(), 401, "No valid session key");
                 return;
             }
 
             RequestAuthenticationMessage authRequest = decryptRequest(clientKey, request);
+            logger.fine("Decrypted authentication request for client: " + authRequest.getClientId());
             validateAuthentication(authRequest, oos, request.getMessageId());
-            
         } catch (CryptoException | InvalidAlgorithmParameterException | ClassNotFoundException e) {
-            logger.log(Level.WARNING, "Authentication failed", e);
+            logger.log(Level.SEVERE, "Authentication failed for request " + request.getMessageId(), e);
             sendErrorResponse(oos, request.getMessageId(), 401, "Authentication error");
         } catch (NoSuchAlgorithmException e) {
-                    // TODO Auto-generated catch block
-                    e.printStackTrace();
-                }
+            logger.log(Level.SEVERE, "Authentication error (NoSuchAlgorithm) for request " + request.getMessageId(), e);
+            sendErrorResponse(oos, request.getMessageId(), 500, "Internal error");
+        }
     }
 
-    // Helper methods
+    // ==================== Helper Methods ====================
+
     private static KeyStore loadKeyStore() throws GeneralSecurityException, IOException {
         return loadStore(KEYSTORE_PATH, getKeystorePassword());
     }
@@ -272,40 +293,51 @@ public class AuthenticationService {
     }
 
     private static KeyPair generateDHKeyPair() throws NoSuchAlgorithmException, InvalidAlgorithmParameterException {
+        logger.fine("Generating Diffie-Hellman key pair with size " + DH_KEY_SIZE);
         KeyPairGenerator keyGen = KeyPairGenerator.getInstance(DH_ALGORITHM);
         keyGen.initialize(DH_KEY_SIZE);
-        return keyGen.generateKeyPair();
+        KeyPair keyPair = keyGen.generateKeyPair();
+        logger.fine("DH key pair generated successfully");
+        return keyPair;
     }
 
     private static PublicKey parsePublicKey(byte[] keyBytes) throws InvalidKeySpecException, NoSuchAlgorithmException {
-        return KeyFactory.getInstance(DH_ALGORITHM)
-            .generatePublic(new X509EncodedKeySpec(keyBytes));
+        logger.fine("Parsing public key from received bytes");
+        return KeyFactory.getInstance(DH_ALGORITHM).generatePublic(new X509EncodedKeySpec(keyBytes));
     }
 
     private static SecretKey generateSharedKey(KeyPair keyPair, PublicKey clientKey) 
         throws InvalidKeyException, NoSuchAlgorithmException {
         
+        logger.fine("Generating shared key using Diffie-Hellman");
         KeyAgreement keyAgreement = KeyAgreement.getInstance(DH_ALGORITHM);
         keyAgreement.init(keyPair.getPrivate());
         keyAgreement.doPhase(clientKey, true);
         
         byte[] sharedSecret = keyAgreement.generateSecret();
         byte[] derivedKey = MessageDigest.getInstance("SHA-256").digest(sharedSecret);
-        return new SecretKeySpec(derivedKey, SYM_ALGORITHM);
+        SecretKey sharedKey = new SecretKeySpec(derivedKey, SYM_ALGORITHM);
+        logger.fine("Shared key generated successfully");
+        return sharedKey;
     }
 
     private static RequestAuthenticationMessage decryptRequest(SecretKey key, Wrapper request)
         throws CryptoException, InvalidAlgorithmParameterException, IOException, ClassNotFoundException {
-        
+        logger.fine("Decrypting authentication request");
         byte[] decrypted = CryptoStuff.getInstance().decrypt(key, request.getMessage());
-        return (RequestAuthenticationMessage) RandomUtils.deserialize(decrypted);
+        Object obj = RandomUtils.deserialize(decrypted);
+        if (!(obj instanceof RequestAuthenticationMessage)) {
+            throw new CryptoException("Decrypted object is not a RequestAuthenticationMessage");
+        }
+        return (RequestAuthenticationMessage) obj;
     }
 
     private static void validateAuthentication(RequestAuthenticationMessage authRequest, 
             ObjectOutputStream oos, UUID requestId) throws IOException, NoSuchAlgorithmException {
-        
+        logger.info("Validating authentication for client: " + authRequest.getClientId());
         byte[] userKey = Authentication.getUsernamePassword(authRequest.getClientId());
         if (userKey == null) {
+            logger.warning("Invalid credentials for client " + authRequest.getClientId());
             sendErrorResponse(oos, requestId, 401, "Invalid credentials");
             return;
         }
@@ -317,10 +349,8 @@ public class AuthenticationService {
 
     private static ResponseAuthenticationMessage createAuthenticationResponse(RequestAuthenticationMessage request) 
         throws NoSuchAlgorithmException, IOException {
-        
-        SecretKey sessionKey = KeyGenerator.getInstance(SYM_ALGORITHM)
-            .generateKey();
-        
+        logger.info("Creating authentication response for client " + request.getClientId());
+        SecretKey sessionKey = KeyGenerator.getInstance(SYM_ALGORITHM).generateKey();
         TicketGrantingTicket tgt = new TicketGrantingTicket(
             request.getClientId(),
             request.getClientAddress(),
@@ -331,41 +361,45 @@ public class AuthenticationService {
         byte[] encryptedTgt = null;
         try {
             encryptedTgt = CryptoStuff.getInstance().encrypt(tgsKey, RandomUtils.serialize(tgt));
-        } catch (CryptoException | InvalidAlgorithmParameterException ex) {
+        } catch (CryptoException | InvalidAlgorithmParameterException e) {
+            logger.log(Level.SEVERE, "Error encrypting TGT", e);
         }
         return new ResponseAuthenticationMessage(sessionKey, encryptedTgt);
     }
 
-    // Response handling
     private static void sendEncryptedResponse(ObjectOutputStream oos, UUID requestId, 
             ResponseAuthenticationMessage response, SecretKey key) throws IOException {
-        
+        logger.info("Sending encrypted authentication response for request " + requestId);
         try {
             byte[] responseBytes = RandomUtils.serialize(response);
             byte[] encryptedResponse = CryptoStuff.getInstance().encrypt(key, responseBytes);
             sendResponse(oos, (byte) 1, encryptedResponse, requestId);
         } catch (CryptoException | InvalidAlgorithmParameterException e) {
+            logger.log(Level.SEVERE, "Response encryption failed for request " + requestId, e);
             sendErrorResponse(oos, requestId, 500, "Response encryption failed");
         }
     }
 
     private static void sendResponse(ObjectOutputStream oos, byte type, byte[] data, UUID requestId) 
         throws IOException {
-        
+        logger.fine("Sending response for request " + requestId);
         oos.writeObject(new Wrapper(type, data, requestId, 200));
         oos.flush();
+        logger.fine("Response sent successfully for request " + requestId);
     }
 
     private static void sendErrorResponse(ObjectOutputStream oos, UUID requestId, int code, String message) {
         try {
+            logger.info("Sending error response for request " + requestId + ": " + message);
             oos.writeObject(new Wrapper((byte) -1, message.getBytes(), requestId, code));
             oos.flush();
         } catch (IOException e) {
-            logger.log(Level.WARNING, "Failed to send error response", e);
+            logger.log(Level.WARNING, "Failed to send error response for request " + requestId, e);
         }
     }
 
-    // Configuration getters
+    // ==================== Configuration Getters ====================
+
     private static String[] getTlsProtocols() {
         String protocols = tlsConfig.getProperty("TLS-PROT-ENF", "TLSv1.2");
         return protocols.split(",");
@@ -380,7 +414,6 @@ public class AuthenticationService {
         return "MUTUAL".equalsIgnoreCase(tlsConfig.getProperty("TLS-AUTH", "NONE"));
     }
 
-
     private static char[] getKeystorePassword() {
         return "UXwE2u1raTW3rlPcSEbmFA==".toCharArray();
     }
@@ -389,7 +422,8 @@ public class AuthenticationService {
         return "E4kLV4p5AGvc2w+EtUoWfA==".toCharArray();
     }
 
-    // Log formatter
+    // ==================== Log Formatter ====================
+
     private static class LogFormatter extends SimpleFormatter {
         private static final String FORMAT = "[%1$tT,%1$tL] [%2$-7s] [%3$s]: %4$s %n";
 

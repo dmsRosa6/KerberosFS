@@ -63,20 +63,17 @@ class ClientUI {
                 appendToTerminal("Command cannot be empty.", Color.RED);
                 return;
             }
-
-            // Append the command
+            // Append the command to the terminal.
             appendToTerminal("> " + command, Color.WHITE);
-
-            //Process the command
             try {
-                String response = cc.requestCommand(command.split(" "), null);
+                String response = cc.executeCommand(command.split(" ")).getResult();
                 appendToTerminal(response, Color.GREEN);
-            } catch ( RuntimeException ex) {
+            } catch (RuntimeException ex) {
                 appendToTerminal(ex.getMessage(), Color.RED);
-            } catch (Exception e1) {
-                            // TODO Auto-generated catch block
-                            e1.printStackTrace();
-                        }finally{
+            } catch (Exception ex) {
+                ex.printStackTrace();
+                appendToTerminal("Unexpected error: " + ex.getMessage(), Color.RED);
+            } finally {
                 commandInput.setText("");
             }
         }
@@ -92,5 +89,4 @@ class ClientUI {
         }
         terminalPane.setCaretPosition(doc.getLength());
     }
-
 }

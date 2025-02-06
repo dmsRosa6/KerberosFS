@@ -1,7 +1,6 @@
 package dmsrosa.kerberosfs;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ObjectInputStream;
@@ -57,23 +56,24 @@ import dmsrosa.kerberosfs.utils.RandomUtils;
 
 public class ClientController {
     private static final Logger logger = Logger.getLogger(ClientController.class.getName());
-    
+
     // Configuration constants
-    private static final String TLS_CONFIG_PATH = "/app/tls-config.properties";
-    private static final String TRUSTSTORE_PATH = "/app/truststore.jks";
-    private static final int MAX_RECONNECT_ATTEMPTS = 3;
+    private static final String TLS_CONFIG_PATH = "/tls-config.properties";
+    private static final String TRUSTSTORE_PATH = "/truststore.jks";
     private static final int RECONNECT_BASE_DELAY_MS = 1000;
-    
-    // TLS configuration
+    // (No need for MAX_RECONNECT_ATTEMPTS since each command gets its own connection)
+
+    // TLS configuration (set in static initializer)
     private static SSLContext sslContext;
     private static String[] enabledProtocols;
     private static String[] cipherSuites;
-    
-    // Client components
+
+    // Client components (handlers)
     private final TGSHandler tgsHandler = new TGSHandler();
     private final ServiceHandler serviceHandler = new ServiceHandler();
     private final AuthHandler authHandler = new AuthHandler();
-    private SSLSocket socket;
+
+    // TLS properties loaded from file.
     private final Properties tlsConfig;
 
     static {
@@ -86,10 +86,10 @@ public class ClientController {
         validateTLSConfiguration();
     }
 
+    // --- Logger Configuration ---
     private static void configureLogger() {
         Logger rootLogger = Logger.getLogger("");
         Arrays.stream(rootLogger.getHandlers()).forEach(rootLogger::removeHandler);
-        
         ConsoleHandler handler = new ConsoleHandler();
         handler.setFormatter(new LogFormatter());
         handler.setLevel(Level.ALL);
@@ -97,51 +97,48 @@ public class ClientController {
         logger.setLevel(Level.INFO);
     }
 
+    // --- SSL/TLS Initialization ---
     private static void initializeSSLContext() {
         try {
             TrustManagerFactory tmf = createTrustManagerFactory();
             sslContext = SSLContext.getInstance("TLSv1.2");
+            // One-way TLS: no key managers needed.
             sslContext.init(null, tmf.getTrustManagers(), new SecureRandom());
         } catch (GeneralSecurityException | IOException e) {
             throw new RuntimeException("SSL context initialization failed", e);
         }
     }
 
-    private static TrustManagerFactory createTrustManagerFactory() 
-        throws KeyStoreException, NoSuchAlgorithmException, CertificateException, IOException {
-        
-        KeyStore trustStore = null;
-        try {
-            trustStore = loadTrustStore();
-        } catch (GeneralSecurityException ex) {
-        }
-        TrustManagerFactory tmf = TrustManagerFactory.getInstance(
-            TrustManagerFactory.getDefaultAlgorithm()
-        );
+    private static TrustManagerFactory createTrustManagerFactory()
+        throws KeyStoreException, NoSuchAlgorithmException, CertificateException, IOException, GeneralSecurityException {
+        KeyStore trustStore = loadTrustStore();
+        TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
         tmf.init(trustStore);
         return tmf;
     }
 
     private static KeyStore loadTrustStore() throws IOException, GeneralSecurityException {
         char[] password = getTruststorePassword();
-        try (InputStream is = new FileInputStream(TRUSTSTORE_PATH)) {
-            KeyStore ks = KeyStore.getInstance("JKS");
+        KeyStore ks = KeyStore.getInstance("JKS");
+        try (InputStream is = ClientController.class.getResourceAsStream(TRUSTSTORE_PATH)) {
+            if (is == null) {
+                throw new RuntimeException("Truststore resource not found:" + TRUSTSTORE_PATH);
+            }
             ks.load(is, password);
-            return ks;
         }
+        return ks;
     }
 
     private static char[] getTruststorePassword() {
-        String envPassword = System.getenv("TRUSTSTORE_PASSWORD");
-        if (envPassword == null || envPassword.isEmpty()) {
-            throw new SecurityException("Truststore password not configured");
-        }
-        return envPassword.toCharArray();
+        return "Y+kS81NkLbcUPXq3J2PPlg==".toCharArray();
     }
 
     private Properties loadTLSConfiguration() {
         Properties props = new Properties();
-        try (InputStream input = new FileInputStream(TLS_CONFIG_PATH)) {
+        try (InputStream input = ClientController.class.getResourceAsStream(TLS_CONFIG_PATH)) {
+            if (input == null) {
+                throw new RuntimeException("TLS configuration resource not found:" + TLS_CONFIG_PATH);
+            }
             props.load(input);
             return props;
         } catch (IOException e) {
@@ -150,40 +147,30 @@ public class ClientController {
     }
 
     private void validateTLSConfiguration() {
-        enabledProtocols = tlsConfig.getProperty("TLS-PROT-ENF", "TLSv1.2")
-            .split(",");
-        cipherSuites = tlsConfig.getProperty("CIPHERSUITES", "")
-            .split(",");
-        
+        enabledProtocols = tlsConfig.getProperty("TLS-PROT-ENF", "TLSv1.2").split(",");
+        cipherSuites = tlsConfig.getProperty("CIPHERSUITES", "").split(",");
         if (enabledProtocols.length == 0) {
             throw new IllegalStateException("No TLS protocols configured");
         }
     }
 
+    // --- Command Execution ---
+    // This method is called to execute a command.
+    // It creates a new connection for the command, uses it, then closes it.
     public CommandResponse executeCommand(String[] commandParts) throws ClientException {
-        try {
-            validateCommandStructure(commandParts);
-            
-            if (isLoginCommand(commandParts)) {
-                return handleLogin(commandParts);
-            }
-            
-            return processAuthenticatedCommand(commandParts);
-        } catch (ClientException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new ClientException("Command execution failed", e);
+        validateCommandStructure(commandParts);
+        if (isLoginCommand(commandParts)) {
+            return handleLogin(commandParts);
         }
+        return processAuthenticatedCommand(commandParts);
     }
 
     private void validateCommandStructure(String[] commandParts) throws InvalidCommandException {
         if (commandParts == null || commandParts.length == 0) {
             throw new InvalidCommandException("Empty command received");
         }
-        
         CommandTypes type = CommandTypes.fromString(commandParts[0])
-            .orElseThrow(() -> new InvalidCommandException("Unknown command: " + commandParts[0]));
-        
+                .orElseThrow(() -> new InvalidCommandException("Unknown command: " + commandParts[0]));
         if (commandParts.length - 1 != type.getExpectedArgs()) {
             throw new InvalidCommandException("Invalid number of arguments for command: " + type);
         }
@@ -197,11 +184,12 @@ public class ClientController {
         try {
             String username = commandParts[1];
             String password = commandParts[2];
-            
-            SecretKey dhKey = performDHKeyExchange();
-            storeUserCredentials(username, password, dhKey);
-            
-            authenticateUser(username, password);
+            // For login, perform key exchange and authentication over a new connection.
+            try (ConnectionHolder conn = createConnection()) {
+                SecretKey dhKey = performDHKeyExchange();
+                storeUserCredentials(username, password, dhKey);
+                authenticateUser(conn, username, password);
+            }
             return new CommandResponse("Login successful", true);
         } catch (Exception e) {
             throw new ClientException("Login failed", e);
@@ -215,39 +203,30 @@ public class ClientController {
         Client.usersDHKey.put(username, userInfo);
     }
 
-    private void authenticateUser(String username, String password) throws ClientException {
+    private void authenticateUser(ConnectionHolder conn, String username, String password) throws ClientException {
         try {
-            reconnectIfNeeded();
-            authHandler.sendAuthRequest(socket, username);
-            ResponseAuthenticationMessage response = authHandler.processAuthResponse(
-                socket, 
-                username,
-                password
-            );
+            authHandler.sendAuthRequest(conn.socket, username);
+            ResponseAuthenticationMessage response = authHandler.processAuthResponse(conn.socket, username, password);
             Client.usersDHKey.get(username).setTGT(response);
         } catch (Exception e) {
             throw new ClientException("Authentication failed", e);
         }
     }
 
-    private CommandResponse processAuthenticatedCommand(String[] commandParts) 
-        throws ClientException {
-        
-        try {
-            Pair<CommandTypes, Command> commandPair = createCommand(commandParts);
-            return executeCommand(commandPair.second);
-        } catch (ClientException e) {
+    private CommandResponse processAuthenticatedCommand(String[] commandParts) throws ClientException {
+        Pair<CommandTypes, Command> commandPair = createCommand(commandParts);
+        // For each command, create a new connection.
+        try (ConnectionHolder conn = createConnection()) {
+            return executeCommandOverConnection(conn, commandPair.second);
+        } catch (IOException e) {
             throw new ClientException("Command processing failed", e);
         }
     }
 
-    private Pair<CommandTypes, Command> createCommand(String[] commandParts) 
-            throws InvalidCommandException {
-        
+    private Pair<CommandTypes, Command> createCommand(String[] commandParts) throws InvalidCommandException {
         if (commandParts.length == 0) {
             throw new InvalidCommandException("Command cannot be empty");
         }
-
         Optional<CommandTypes> c = CommandTypes.fromString(commandParts[0]);
         Command command = null;
         FilePayload filePayload = null;
@@ -259,7 +238,6 @@ public class ClientController {
             case CP -> command = createCommandForCp(commandParts, commandParts[1]);
             default -> throw new InvalidCommandException("Unknown command type: " + commandParts[0]);
         }
-
         return new Pair<>(c.get(), command);
     }
 
@@ -272,23 +250,19 @@ public class ClientController {
         if (fullCommand.length < 3) {
             throw new RuntimeException("Missing local file path for PUT command");
         }
-
-        String localFilePath = fullCommand[2];  
+        String localFilePath = fullCommand[2];
         File file = new File(localFilePath);
         if (!file.exists() || !file.isFile()) {
             throw new RuntimeException("Local file does not exist: " + localFilePath);
         }
-
         byte[] fileContent;
         try {
             fileContent = Files.readAllBytes(file.toPath());
         } catch (IOException ex) {
             throw new RuntimeException("Failed to read file: " + localFilePath, ex);
         }
-
         byte[] metaData = createFileMetaData(file.getName(), file.length(), file.lastModified());
         filePayload = new FilePayload(metaData, fileContent);
-
         return new Command(fullCommand[0], clientId, filePayload, fullCommand[1]);
     }
 
@@ -311,15 +285,12 @@ public class ClientController {
         return new Command(fullCommand[0], clientId, null, fullCommand[2], fullCommand[3]);
     }
 
-
-    private CommandResponse executeCommand(Command command) throws ClientException {
+    private CommandResponse executeCommandOverConnection(ConnectionHolder conn, Command command) throws ClientException {
         try {
-            reconnectIfNeeded();
-            
+            // For service commands, perform authentication and TGS steps over this connection.
             Authenticator authenticator = createAuthenticator(command);
-            ResponseTGSMessage sgt = requestServiceTicket(command, authenticator);
-            ResponseServiceMessage response = executeServiceCommand(command, sgt, authenticator);
-            
+            ResponseTGSMessage sgt = requestServiceTicket(conn, command, authenticator);
+            ResponseServiceMessage response = executeServiceCommand(conn, command, sgt, authenticator);
             return new CommandResponse(
                 Arrays.toString(response.getCommandReturn().getPayload()),
                 true
@@ -328,7 +299,7 @@ public class ClientController {
             throw new ClientException("Command execution failed", e);
         }
     }
-
+    
     private Authenticator createAuthenticator(Command command) {
         return new Authenticator(
             command.getUsername(),
@@ -336,200 +307,147 @@ public class ClientController {
             command
         );
     }
-
-    private ResponseTGSMessage requestServiceTicket(Command command, Authenticator authenticator) 
-        throws ClientException, Exception {
-        
+    
+    private ResponseTGSMessage requestServiceTicket(ConnectionHolder conn, Command command, Authenticator authenticator) 
+            throws ClientException, Exception {
         try {
             byte[] authenticatorData = RandomUtils.serialize(authenticator);
             UserInfo userInfo = Client.usersDHKey.get(command.getUsername());
-            
-            tgsHandler.sendTGSRequest(
-                socket,
-                userInfo.getTGT().getEncryptedTGT(),
-                authenticatorData
-            );
-
-            return tgsHandler.processTGSResponse(socket, userInfo.getKeyPassword());
+            tgsHandler.sendTGSRequest(conn.socket, userInfo.getTGT().getEncryptedTGT(), authenticatorData);
+            return tgsHandler.processTGSResponse(conn.socket, userInfo.getKeyPassword());
         } catch (IOException e) {
             throw new ClientException("Service ticket request failed", e);
         }
     }
-
-    private ResponseServiceMessage executeServiceCommand(Command command, 
+    
+    private ResponseServiceMessage executeServiceCommand(ConnectionHolder conn, Command command, 
             ResponseTGSMessage sgt, Authenticator authenticator) throws ClientException {
-        
         try {
             byte[] authenticatorData = RandomUtils.serialize(authenticator);
-            serviceHandler.sendServiceRequest(
-                socket,
-                sgt,
-                authenticatorData,
-                command
-            );
-
-            return serviceHandler.processServiceResponse(socket, sgt);
+            serviceHandler.sendServiceRequest(conn.socket, sgt, authenticatorData, command);
+            return serviceHandler.processServiceResponse(conn.socket, sgt);
         } catch (Exception e) {
             throw new ClientException("Service command execution failed", e);
         }
     }
-
+    
     private SecretKey performDHKeyExchange() throws ClientException {
-        try {
-            reconnectIfNeeded();
-            
+        try (ConnectionHolder conn = createConnection()) {
+            // Use the new connection exclusively for key exchange.
             KeyPair keyPair = generateDHKeyPair();
-            exchangePublicKeys(keyPair);
-            PublicKey serverKey = receiveServerPublicKey();
-            
+            exchangePublicKeys(conn, keyPair);
+            PublicKey serverKey = receiveServerPublicKey(conn);
             return deriveSharedSecret(keyPair, serverKey);
-        } catch (IOException | ClassNotFoundException | InvalidAlgorithmParameterException | InvalidKeyException | NoSuchAlgorithmException | InvalidKeySpecException e) {
+        } catch (IOException | ClassNotFoundException | InvalidAlgorithmParameterException 
+                 | InvalidKeyException | NoSuchAlgorithmException | InvalidKeySpecException e) {
             throw new ClientException("Key exchange failed", e);
         }
     }
-
-    private KeyPair generateDHKeyPair() throws NoSuchAlgorithmException, 
-        InvalidAlgorithmParameterException {
-        
+    
+    private KeyPair generateDHKeyPair() throws NoSuchAlgorithmException, InvalidAlgorithmParameterException {
         KeyPairGenerator keyGen = KeyPairGenerator.getInstance("DH");
         keyGen.initialize(2048);
         return keyGen.generateKeyPair();
     }
-
-    private void exchangePublicKeys(KeyPair keyPair) throws IOException {
-        try (ObjectOutputStream oos = new ObjectOutputStream(socket.getOutputStream())) {
-            Wrapper keyWrapper = new Wrapper(
-                (byte) 0, 
-                keyPair.getPublic().getEncoded(), 
-                UUID.randomUUID()
-            );
-            oos.writeObject(keyWrapper);
-        }
+    
+    // The methods below use the persistent streams from the given ConnectionHolder.
+    private void exchangePublicKeys(ConnectionHolder conn, KeyPair keyPair) throws IOException {
+        Wrapper keyWrapper = new Wrapper((byte) 0, keyPair.getPublic().getEncoded(), UUID.randomUUID());
+        conn.oos.writeObject(keyWrapper);
+        conn.oos.flush();
     }
-
-    private PublicKey receiveServerPublicKey() throws IOException, ClassNotFoundException, 
-        NoSuchAlgorithmException, InvalidKeySpecException {
-        
-        try (ObjectInputStream ois = new ObjectInputStream(socket.getInputStream())) {
-            Wrapper response = (Wrapper) ois.readObject();
-            X509EncodedKeySpec keySpec = new X509EncodedKeySpec(response.getMessage());
-            return KeyFactory.getInstance("DH").generatePublic(keySpec);
-        }
+    
+    private PublicKey receiveServerPublicKey(ConnectionHolder conn) throws IOException, ClassNotFoundException, 
+            NoSuchAlgorithmException, InvalidKeySpecException {
+        Wrapper response = (Wrapper) conn.ois.readObject();
+        X509EncodedKeySpec keySpec = new X509EncodedKeySpec(response.getMessage());
+        return KeyFactory.getInstance("DH").generatePublic(keySpec);
     }
-
-    private SecretKey deriveSharedSecret(KeyPair keyPair, PublicKey serverKey) 
-        throws InvalidKeyException, NoSuchAlgorithmException {
-        
+    
+    private SecretKey deriveSharedSecret(KeyPair keyPair, PublicKey serverKey) throws InvalidKeyException, NoSuchAlgorithmException {
         KeyAgreement keyAgreement = KeyAgreement.getInstance("DH");
         keyAgreement.init(keyPair.getPrivate());
         keyAgreement.doPhase(serverKey, true);
-        
         byte[] sharedSecret = keyAgreement.generateSecret();
         byte[] derivedKey = MessageDigest.getInstance("SHA-256").digest(sharedSecret);
-        
         return new SecretKeySpec(derivedKey, "AES");
     }
-
-    private synchronized void reconnectIfNeeded() throws IOException {
-        if (isConnectionValid()) return;
-
-        int attempt = 0;
-        while (attempt < MAX_RECONNECT_ATTEMPTS) {
-            try {
-                attempt++;
-                logger.info("Connection attempt " + attempt + "/" + MAX_RECONNECT_ATTEMPTS);
-                establishNewConnection();
-                return;
-            } catch (IOException e) {
-                handleReconnectError(attempt, e);
-            }
+    
+    // --- Connection Management: New connection per operation ---
+    // A simple holder for a connection's socket and its streams.
+    private static class ConnectionHolder implements AutoCloseable {
+        final SSLSocket socket;
+        final ObjectOutputStream oos;
+        final ObjectInputStream ois;
+        
+        ConnectionHolder(SSLSocket socket, ObjectOutputStream oos, ObjectInputStream ois) {
+            this.socket = socket;
+            this.oos = oos;
+            this.ois = ois;
         }
-        throw new IOException("Failed to connect after " + MAX_RECONNECT_ATTEMPTS + " attempts");
+        
+        @Override
+        public void close() throws IOException {
+            socket.close();
+        }
     }
-
-    private boolean isConnectionValid() {
-        return socket != null && 
-               !socket.isClosed() && 
-               socket.isConnected() &&
-               !socket.isInputShutdown() &&
-               !socket.isOutputShutdown();
-    }
-
-    private void establishNewConnection() throws IOException {
-        closeExistingConnection();
-        socket = createNewSocket();
-        socket.startHandshake();
+    
+    // Create a new connection (socket, oos, and ois) and return a ConnectionHolder.
+    private ConnectionHolder createConnection() throws IOException {
+        SSLSocket newSocket = createNewSocket();
+        newSocket.startHandshake();
+        ObjectOutputStream out = new ObjectOutputStream(newSocket.getOutputStream());
+        ObjectInputStream in = new ObjectInputStream(newSocket.getInputStream());
         logger.info("Successfully connected to dispatcher");
+        return new ConnectionHolder(newSocket, out, in);
     }
-
-    private void closeExistingConnection() {
-        if (socket != null) {
-            try {
-                socket.close();
-            } catch (IOException e) {
-                logger.warning("Error closing socket: " + e.getMessage());
-            }
-        }
-    }
-
+    
+    // --- Helper: Create a new socket ---
     private SSLSocket createNewSocket() throws IOException {
         SSLSocket newSocket = (SSLSocket) sslContext.getSocketFactory()
-            .createSocket(Client.DISPATCHER_HOST, Client.DISPATCHER_PORT);
-        
+                .createSocket(Client.DISPATCHER_HOST, Client.DISPATCHER_PORT);
         newSocket.setEnabledProtocols(enabledProtocols);
         newSocket.setEnabledCipherSuites(cipherSuites);
         newSocket.setKeepAlive(true);
         return newSocket;
     }
-
-    private void handleReconnectError(int attempt, IOException e) throws IOException {
-        logger.log(Level.WARNING, "Connection attempt failed: " + e.getMessage());
-        
-        try {
-            Thread.sleep((long) (RECONNECT_BASE_DELAY_MS * Math.pow(2, attempt)));
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-            throw new IOException("Reconnection interrupted", ie);
-        }
-        
-        if (attempt == MAX_RECONNECT_ATTEMPTS) {
-            throw new IOException("Final reconnection attempt failed", e);
-        }
+    
+    // For persistent connections we no longer reuse a single connection
+    // because we create a new one for each operation. Therefore, reconnectIfNeeded() is:
+    private synchronized void reconnectIfNeeded() {
+        // No persistent connection is maintained, so nothing to check.
+        // Each operation creates its own connection.
     }
-
-    // Utility classes
+    
+    // --- Utility Classes ---
     private static class LogFormatter extends SimpleFormatter {
         private static final String FORMAT = "[%1$tT.%1$tL] [%2$-7s] [%3$s] %4$s%n";
-
         @Override
         public String format(LogRecord record) {
             return String.format(FORMAT,
-                new Date(record.getMillis()),
-                record.getLevel().getLocalizedName(),
-                record.getLoggerName(),
-                record.getMessage());
+                    new Date(record.getMillis()),
+                    record.getLevel().getLocalizedName(),
+                    record.getLoggerName(),
+                    record.getMessage());
         }
     }
-
+    
     public static class ClientException extends Exception {
         public ClientException(String message) { super(message); }
         public ClientException(String message, Throwable cause) { super(message, cause); }
     }
-
+    
     public static class InvalidCommandException extends ClientException {
         public InvalidCommandException(String message) { super(message); }
     }
-
+    
     public static class CommandResponse {
         private final String result;
         private final boolean success;
-
         public CommandResponse(String result, boolean success) {
             this.result = result;
             this.success = success;
         }
-
-        // Getters
         public String getResult() { return result; }
         public boolean isSuccess() { return success; }
     }
