@@ -83,5 +83,5 @@ done
 # Run the client application
 echo "Running the client application..."
 cd KerberosFSClient
-#java -jar target/kerberos-filesystem-client-1.0.0.jar
+java -jar target/kerberos-filesystem-client-1.0.0.jar
 handle_error "Failed to run the client application."

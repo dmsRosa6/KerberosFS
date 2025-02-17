@@ -8,7 +8,6 @@ import java.util.UUID;
 import java.util.logging.Level;
 
 import javax.crypto.SecretKey;
-import javax.net.ssl.SSLSocket;
 
 import dmsrosa.kerberosfs.Client;
 import dmsrosa.kerberosfs.crypto.CryptoException;
@@ -21,19 +20,20 @@ import dmsrosa.kerberosfs.utils.RandomUtils;
 
 public class TGSHandler {
 
-        public void sendTGSRequest(SSLSocket socket, byte[] encryptedTGT, byte[] authenticator) {
+    /**
+     * Sends a TGS request using the given ObjectOutputStream.
+     *
+     * @param oos            the ObjectOutputStream (lazily created) to send the request
+     * @param encryptedTGT   the encrypted Ticket Granting Ticket
+     * @param authenticator  the authenticator data (typically already encrypted)
+     */
+    public void sendTGSRequest(ObjectOutputStream oos, byte[] encryptedTGT, byte[] authenticator, UUID session) {
         try {
-            // Communication logic with the server
-            ObjectOutputStream oos = new ObjectOutputStream(socket.getOutputStream());
-
             RequestTGSMessage requestMessage = new RequestTGSMessage(Client.SERVICE_ID, encryptedTGT, authenticator);
-
             byte[] requestMessageSerialized = RandomUtils.serialize(requestMessage);
-
-            // Create wrapper object with serialized request message for auth and its type
-            Wrapper wrapper = new Wrapper((byte) 3, requestMessageSerialized, UUID.randomUUID());
-
-            // Send wrapper to dispatcher
+            // Create a wrapper object with the serialized request message.
+            Wrapper wrapper = new Wrapper((byte) 2, requestMessageSerialized, session);
+            // Send the wrapper to the dispatcher.
             oos.writeObject(wrapper);
             oos.flush();
         } catch (IOException e) {
@@ -41,17 +41,16 @@ public class TGSHandler {
         }
     }
 
-    public ResponseTGSMessage processTGSResponse(SSLSocket socket, SecretKey key) throws Exception {
+    /**
+     * Processes the TGS response using the given ObjectInputStream and decryption key.
+     *
+     * @param ois the ObjectInputStream (lazily created) from which to read the response
+     * @param key the SecretKey to decrypt the response message
+     * @return a ResponseTGSMessage object containing the response data
+     * @throws Exception if any error occurs during processing
+     */
+    public ResponseTGSMessage processTGSResponse(ObjectInputStream ois, SecretKey key) throws Exception {
         ResponseTGSMessage responseTGSMessage = null;
-
-        // Communication logic with the server
-        ObjectInputStream ois = null;
-        try {
-            ois = new ObjectInputStream(socket.getInputStream());
-        } catch (IOException e) {
-            Client.logger.log(Level.WARNING, e.getMessage());
-        }
-
         Wrapper wrapper = null;
         try {
             wrapper = (Wrapper) ois.readObject();
@@ -59,11 +58,10 @@ public class TGSHandler {
             Client.logger.log(Level.WARNING, e.getMessage());
         }
         if (wrapper.getStatus() == MessageStatus.FORBIDDEN.getCode()) {
-            throw new RuntimeException("User is trying to use ../ on a absolute path");
+            throw new RuntimeException("User is trying access a not path that is forbidden");
         } else if (wrapper.getStatus() == MessageStatus.UNAUTHORIZED.getCode()) {
-            throw new RuntimeException("User does not have permission to do that operation");
+            throw new RuntimeException("User does not have permission to perform that operation");
         }
-        // int responseStatus = wrapper.getStatus();
         byte[] encryptedResponse = wrapper.getMessage();
         byte[] decryptedResponse = null;
         try {
@@ -71,13 +69,11 @@ public class TGSHandler {
         } catch (InvalidAlgorithmParameterException | CryptoException e) {
             Client.logger.log(Level.WARNING, e.getMessage());
         }
-
         try {
             responseTGSMessage = (ResponseTGSMessage) RandomUtils.deserialize(decryptedResponse);
         } catch (ClassNotFoundException e) {
             Client.logger.log(Level.WARNING, e.getMessage());
         }
-
         return responseTGSMessage;
     }
 }

@@ -5,6 +5,7 @@ import java.security.spec.InvalidKeySpecException;
 import java.security.spec.KeySpec;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 
 import javax.crypto.SecretKey;
 import javax.crypto.SecretKeyFactory;
@@ -21,6 +22,7 @@ public class UserInfo {
     private final Map<String, ResponseTGSMessage> mapSGT;
     private SecretKey dhKey;
     private SecretKey keyPassword;
+    private UUID session;
 
     private static final byte[] salt = {
             0x07, 0x06, 0x05, 0x04, 0x03,
@@ -70,6 +72,14 @@ public class UserInfo {
         } catch (NoSuchAlgorithmException | InvalidKeySpecException e) {
             e.printStackTrace();
         }
+    }
+
+    public void setSession(UUID uuid){
+        this.session = uuid;
+    }
+
+    public UUID getSessionUUID(){
+        return this.session;
     }
 
     private static byte[] hashPassword(String password) throws NoSuchAlgorithmException, InvalidKeySpecException {

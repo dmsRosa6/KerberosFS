@@ -66,7 +66,7 @@ class ClientUI {
             // Append the command to the terminal.
             appendToTerminal("> " + command, Color.WHITE);
             try {
-                String response = cc.executeCommand(command.split(" ")).getResult();
+                String response = cc.executeCommand(command.split(" ")).result();
                 appendToTerminal(response, Color.GREEN);
             } catch (RuntimeException ex) {
                 appendToTerminal(ex.getMessage(), Color.RED);

@@ -25,7 +25,7 @@ public enum CommandTypes {
 
     public static Optional<CommandTypes> fromString(String command) {
         for (CommandTypes type : CommandTypes.values()) {
-            if (type.name().equalsIgnoreCase(command)) {
+            if (type.name().equals(command.toUpperCase())) {
                 return Optional.of(type);
             }
         }

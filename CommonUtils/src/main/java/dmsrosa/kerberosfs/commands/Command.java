@@ -9,34 +9,34 @@ public class Command implements java.io.Serializable {
     @Serial
     private static final long serialVersionUID = 1L;
 
-    private final String command;
     private final String username;
     private final FilePayload file;
-    private final String path;
-    private final String cpToPath;
+    private String path;
+    private String cpToPath;
+    private CommandTypes type;
 
-    public Command(String command, String username, FilePayload file, String path) {
-        this.command = command;
+    public Command(String username, FilePayload file, String path, CommandTypes type) {
         this.username = username;
         this.file = file;
         this.path = path;
         this.cpToPath = null;
+        this.type = type;
     }
 
-    public Command(String command, String username, FilePayload file, String path, String cpToPath) {
-        this.command = command;
+    public Command(String username, FilePayload file, String path, String cpToPath, CommandTypes type) {
         this.username = username;
         this.file = file;
         this.path = path;
         this.cpToPath = cpToPath;
+        this.type = type;
     }
 
-    public Command(String command, String username, String path) {
-        this.command = command;
+    public Command(String username, String path, CommandTypes type) {
         this.username = username;
         this.file = null;
         this.path = path;
         this.cpToPath = null;
+        this.type = type;
     }
 
     public String getUsername() {
@@ -47,8 +47,8 @@ public class Command implements java.io.Serializable {
         return cpToPath;
     }
 
-    public String getCommand() {
-        return command;
+    public CommandTypes getCommand() {
+        return type;
     }
 
     public FilePayload getPayload() {
@@ -59,14 +59,18 @@ public class Command implements java.io.Serializable {
         return path;
     }
 
-    public boolean isValid() {
-        return !(path.contains("../") || (cpToPath != null && cpToPath.contains("../")));
+    public void setPath(String s){
+        this.path = s;
     }
 
+    public void setCpToPath(String s){
+        this.cpToPath = s;
+    }
+    
     @Override
     public String toString() {
         return "Command{" +
-                "command='" + command + '\'' +
+                "command='" + type.toString() + '\'' +
                 ", username='" + username + '\'' +
                 ", path='" + path + '\'' +
                 ", cpToPath='" + (cpToPath == null ? "null" : cpToPath) + '\'' +

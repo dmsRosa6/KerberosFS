@@ -59,19 +59,18 @@ public class AccessControl {
     }
 
     // Check if a user has permission to execute a specific command
-    public boolean hasPermission(String username, String command) {
+    public boolean hasPermission(String username, CommandTypes commandType) {
         String permission = userPermissions.get(username);
         if (permission == null) return false;
 
-        return validatePermission(permission, command.toUpperCase());
+        return validatePermission(permission, commandType);
     }
 
     // Validate permission against the command type
-    private boolean validatePermission(String permission, String command) {
+    private boolean validatePermission(String permission, CommandTypes commandType) {
         if (permission.equals("rw")) return true;
 
         try {
-            CommandTypes commandType = CommandTypes.valueOf(command.toUpperCase());
             if (permission.equals("r") && isReadCommand(commandType)) return true;
             if (permission.equals("w") && isWriteCommand(commandType)) return true;
         } catch (IllegalArgumentException e) {

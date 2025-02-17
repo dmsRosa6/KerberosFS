@@ -8,7 +8,6 @@ import java.util.UUID;
 import java.util.logging.Level;
 
 import javax.crypto.SecretKey;
-import javax.net.ssl.SSLSocket;
 
 import dmsrosa.kerberosfs.Client;
 import dmsrosa.kerberosfs.crypto.CryptoException;
@@ -21,25 +20,28 @@ import dmsrosa.kerberosfs.utils.RandomUtils;
 
 public class AuthHandler {
 
-    // Process login (send credentials)
-    public void sendAuthRequest(SSLSocket socket, String clientId) {
+    /**
+     * Sends the authentication request using the provided ObjectOutputStream.
+     *
+     * @param oos      the ObjectOutputStream (lazily created) to use for sending the request
+     * @param clientId the client identifier (username)
+     */
+    public void sendAuthRequest(ObjectOutputStream oos, String clientId, UUID session) {
         try {
-            Client.logger.severe("Sending auth request for client: " + clientId);
+            Client.logger.info("Sending auth request for client: " + clientId);
+            RequestAuthenticationMessage requestMessage = new RequestAuthenticationMessage(
+                    clientId,
+                    Client.CLIENT_ADDR,
+                    Client.TGS_ID
+            );
+            byte[] serializedRequest = RandomUtils.serialize(requestMessage);
+            byte[] encryptedRequestMessage = CryptoStuff.getInstance().encrypt(
+                    Client.usersInfo.get(clientId).getDhKey(),
+                    serializedRequest
+            );
 
-            // Communication logic with the server
-            ObjectOutputStream oos = new ObjectOutputStream(socket.getOutputStream());
-
-            RequestAuthenticationMessage requestMessage = new RequestAuthenticationMessage(clientId, Client.CLIENT_ADDR,
-                    Client.TGS_ID);
-
-            byte[] encryptedRequestMessge = CryptoStuff.getInstance().encrypt(Client.usersDHKey.get(clientId).getDhKey(),
-            
-            RandomUtils.serialize(requestMessage));
-
-            // Create wrapper object with serialized request message for auth and its type
-            Wrapper wrapper = new Wrapper((byte) 1, encryptedRequestMessge, UUID.randomUUID());
-
-            // Send wrapper to dispatcher
+            // Create a wrapper with the encrypted request message
+            Wrapper wrapper = new Wrapper((byte) 1, encryptedRequestMessage, session);
             oos.writeObject(wrapper);
             oos.flush();
         } catch (IOException | InvalidAlgorithmParameterException | CryptoException e) {
@@ -47,22 +49,28 @@ public class AuthHandler {
         }
     }
 
-    public ResponseAuthenticationMessage processAuthResponse(SSLSocket socket, String clientId,
-            String password) throws Exception {
-        Client.logger.log(Level.SEVERE, "Processing auth response for client: {0}", clientId);
+    /**
+     * Processes the authentication response using the provided ObjectInputStream.
+     *
+     * @param ois      the ObjectInputStream (lazily created) to use for reading the response
+     * @param clientId the client identifier (username)
+     * @param password the password provided by the user (used for error handling in this example)
+     * @return a ResponseAuthenticationMessage containing the authentication data, or null if an error occurs
+     * @throws Exception if a fatal error occurs during processing
+     */
+    public ResponseAuthenticationMessage processAuthResponse(ObjectInputStream ois, String clientId, String password) throws Exception {
+        Client.logger.log(Level.INFO, "Processing auth response for client: " + clientId);
         ResponseAuthenticationMessage responseAuthenticationMessage = null;
         try {
-            ObjectInputStream ois = new ObjectInputStream(socket.getInputStream());
-
             Wrapper wrapper = (Wrapper) ois.readObject();
             MessageStatus responseStatus = MessageStatus.fromCode(wrapper.getStatus());
             switch (responseStatus) {
                 case OK:
                     byte[] encryptedResponse = wrapper.getMessage();
                     try {
-                        SecretKey clientKey = Client.usersDHKey.get(clientId).getKeyPassword();
-                        byte[] descryptedResponse = CryptoStuff.getInstance().decrypt(clientKey, encryptedResponse);
-                        responseAuthenticationMessage = (ResponseAuthenticationMessage) RandomUtils.deserialize(descryptedResponse);
+                        SecretKey clientKey = Client.usersInfo.get(clientId).getKeyPassword();
+                        byte[] decryptedResponse = CryptoStuff.getInstance().decrypt(clientKey, encryptedResponse);
+                        responseAuthenticationMessage = (ResponseAuthenticationMessage) RandomUtils.deserialize(decryptedResponse);
                     } catch (CryptoException e) {
                         throw new RuntimeException("This password is incorrect.");
                     }
@@ -73,7 +81,7 @@ public class AuthHandler {
                     throw new RuntimeException("Unexpected response status: " + responseStatus);
             }
         } catch (IOException | ClassNotFoundException | InvalidAlgorithmParameterException e) {
-           Client.logger.log(Level.WARNING, e.getMessage());
+            Client.logger.log(Level.WARNING, e.getMessage());
         }
         return responseAuthenticationMessage;
     }

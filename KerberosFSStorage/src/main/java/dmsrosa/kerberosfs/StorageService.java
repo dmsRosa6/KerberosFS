@@ -6,12 +6,16 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
+import java.security.InvalidAlgorithmParameterException;
 import java.security.KeyStore;
 import java.security.SecureRandom;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.Properties;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.logging.ConsoleHandler;
@@ -21,17 +25,27 @@ import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 import java.util.logging.SimpleFormatter;
 
+import javax.crypto.SecretKey;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.TrustManagerFactory;
 
+import dmsrosa.kerberosfs.commands.Command;
+import dmsrosa.kerberosfs.commands.CommandReturn;
+import dmsrosa.kerberosfs.crypto.CryptoException;
+import dmsrosa.kerberosfs.crypto.CryptoStuff;
+import dmsrosa.kerberosfs.messages.FilePayload;
+import dmsrosa.kerberosfs.messages.RequestServiceMessage;
+import dmsrosa.kerberosfs.messages.ResponseServiceMessage;
+import dmsrosa.kerberosfs.messages.ServiceGrantingTicket;
 import dmsrosa.kerberosfs.messages.Wrapper;
 import dmsrosa.kerberosfs.utils.RandomUtils;
 
 public class StorageService {
-    // Conf
+
+    // Configuration constants
     public static final String KEYSTORE_PATH = "/app/keystore.jks";
     public static final String TRUSTSTORE_PATH = "/app/truststore.jks";
     public static final String TLS_VERSION = "TLSv1.2";
@@ -49,7 +63,7 @@ public class StorageService {
 
     private static FsManager fsManager;
 
-    // Custom logger to print the timestamp in milliseconds
+    // Custom logger with a custom formatter
     private static final Logger logger = Logger.getLogger(StorageService.class.getName());
 
     static {
@@ -58,25 +72,74 @@ public class StorageService {
         initializeSSLContext();
     }
 
+    public static void main(String[] args) {
+        try {
+            fsManager = new FsManager("fs");
+            logger.info("FsManager initialized successfully.");
+        } catch (IOException e) {
+            logger.log(Level.SEVERE, "Failed to initialize FsManager", e);
+            System.exit(1);
+        }
+        try (SSLServerSocket serverSocket = createServerSocket()) {
+            logger.info("Storage service started on port " + PORT);
+            acceptConnections(serverSocket);
+        } catch (Exception e) {
+            logger.log(Level.SEVERE, "Failed to start storage service", e);
+            System.exit(1);
+        }
+    }
+
+    // ----------------------- Configuration & Initialization
+    // -----------------------
+
     private static void getConfigs() {
         try (FileInputStream tls = new FileInputStream(TLS_CONF_PATH);
                 FileInputStream keys = new FileInputStream(KEYS_CONF_PATH)) {
             tlsConfig.load(tls);
             cryptoConfig.load(keys);
+            logger.info("Configurations loaded successfully from " + TLS_CONF_PATH + " and " + KEYS_CONF_PATH);
         } catch (IOException ex) {
-            logger.warning(ex.getMessage());
+            logger.log(Level.WARNING, "Error loading configuration: " + ex.getMessage(), ex);
+        }
+    }
+
+    private static void initLogger() {
+        try {
+            Logger rootLogger = Logger.getLogger("");
+            Handler[] handlers = rootLogger.getHandlers();
+            if (handlers.length > 0 && handlers[0] instanceof ConsoleHandler) {
+                rootLogger.removeHandler(handlers[0]);
+            }
+            ConsoleHandler handler = new ConsoleHandler();
+            handler.setFormatter(new SimpleFormatter() {
+                private static final String format = "[%1$tT,%1$tL] [%2$-7s] [%3$s]: %4$s %n";
+
+                @Override
+                public synchronized String format(LogRecord lr) {
+                    return String.format(format,
+                            new Date(lr.getMillis()),
+                            lr.getLevel().getLocalizedName(),
+                            lr.getLoggerName(),
+                            lr.getMessage());
+                }
+            });
+            logger.addHandler(handler);
+            logger.info("Logger initialized with custom console formatter.");
+        } catch (Exception e) {
+            e.printStackTrace();
         }
     }
 
     private static void initializeSSLContext() {
         try {
+            logger.info("Initializing SSL context.");
             logger.info("Loading keystore from: " + KEYSTORE_PATH);
             KeyStore ks = loadKeyStore();
-            logger.info("Keystore contains " + ks.size() + " entries");
+            logger.info("Keystore loaded with " + ks.size() + " entries.");
 
             logger.info("Loading truststore from: " + TRUSTSTORE_PATH);
             KeyStore ts = loadTrustStore();
-            logger.info("Truststore contains " + ts.size() + " entries");
+            logger.info("Truststore loaded with " + ts.size() + " entries.");
 
             // Initialize KeyManagerFactory
             KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
@@ -87,11 +150,10 @@ public class StorageService {
             tmf.init(ts);
 
             // Initialize SSLContext
-            sslContext = SSLContext.getInstance("TLSv1.2");
+            sslContext = SSLContext.getInstance(TLS_VERSION);
             sslContext.init(kmf.getKeyManagers(), tmf.getTrustManagers(), new SecureRandom());
 
-            logger.info("SSL Context successfully initialized.");
-
+            logger.info("SSL context successfully initialized.");
         } catch (IOException | GeneralSecurityException e) {
             logger.log(Level.SEVERE, "SSL Context Initialization Failed", e);
             throw new RuntimeException(e);
@@ -114,69 +176,31 @@ public class StorageService {
         }
     }
 
-    private static void initLogger() {
-        try {
-            Logger rootLogger = Logger.getLogger("");
-            Handler[] handlers = rootLogger.getHandlers();
-            if (handlers[0] instanceof ConsoleHandler) {
-                rootLogger.removeHandler(handlers[0]);
-            }
-
-            ConsoleHandler handler = new ConsoleHandler();
-            handler.setFormatter(new SimpleFormatter() {
-                private static final String format = "[%1$tT,%1$tL] [%2$-7s] [%3$s]: %4$s %n";
-
-                @Override
-                public synchronized String format(LogRecord lr) {
-                    return String.format(format,
-                            new Date(lr.getMillis()),
-                            lr.getLevel().getLocalizedName(),
-                            lr.getLoggerName(),
-                            lr.getMessage());
-                }
-            });
-            logger.addHandler(handler);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-
-    public static void main(String[] args) {
-        // Set logger level
-        logger.setLevel(Level.SEVERE);
-        try {
-            fsManager = new FsManager("fs");
-        } catch (IOException e) {
-            // TODO Auto-generated catch block
-            e.printStackTrace();
-        }
-        try (SSLServerSocket serverSocket = createServerSocket()) {
-            logger.info("Access control service started on port " + PORT);
-            acceptConnections(serverSocket);
-        } catch (Exception e) {
-            logger.log(Level.SEVERE, "Failed to start storage service", e.getMessage());
-            System.exit(1);
-        }
-    }
-
     private static SSLServerSocket createServerSocket() throws IOException {
-
-        SSLServerSocket serverSocket = (SSLServerSocket) sslContext.getServerSocketFactory()
-                .createServerSocket(PORT);
-
+        SSLServerSocket serverSocket = (SSLServerSocket) sslContext.getServerSocketFactory().createServerSocket(PORT);
         serverSocket.setEnabledProtocols(getTlsProtocols());
-        serverSocket.setEnabledCipherSuites(getCipherSuites());
+        String[] ciphers = getCipherSuites();
+        if (ciphers != null && ciphers.length > 0 && !ciphers[0].isEmpty()) {
+            serverSocket.setEnabledCipherSuites(ciphers);
+        }
         serverSocket.setNeedClientAuth(needsClientAuth());
-
+        logger.info("ServerSocket created with protocols: " + Arrays.toString(getTlsProtocols())
+                + " and ciphers: " + Arrays.toString(getCipherSuites()));
         return serverSocket;
     }
 
+    // ----------------------- Connection Handling -----------------------
+
     private static void acceptConnections(SSLServerSocket serverSocket) {
         ExecutorService executor = Executors.newCachedThreadPool();
+        logger.info("Ready to accept client connections.");
         while (!serverSocket.isClosed()) {
             try {
                 SSLSocket clientSocket = (SSLSocket) serverSocket.accept();
-                executor.submit(() -> handleClientConnection(clientSocket));
+                logger.info("Accepted connection from " + clientSocket.getRemoteSocketAddress());
+                // Wrap the accepted socket in our custom SocketStreams class.
+                SocketStreams streams = new SocketStreams(clientSocket);
+                executor.submit(() -> handleClientConnection(streams));
             } catch (IOException e) {
                 logger.log(Level.WARNING, "Error accepting client connection", e);
             }
@@ -184,84 +208,131 @@ public class StorageService {
         executor.shutdown();
     }
 
-    private static void handleClientConnection(SSLSocket clientSocket) {
-        try (clientSocket;
-                ObjectInputStream ois = new ObjectInputStream(clientSocket.getInputStream());
-                ObjectOutputStream oos = new ObjectOutputStream(clientSocket.getOutputStream())) {
-
-            clientSocket.startHandshake();
-            logger.info("Client connected: " + clientSocket.getRemoteSocketAddress());
-
-            while (!clientSocket.isClosed()) {
-                Wrapper request = (Wrapper) ois.readObject();
-                processRequest(request, oos);
+    private static void handleClientConnection(SocketStreams streams) {
+        try (streams) {
+            logger.info("Client connected: " + streams.getRemoteAddress());
+            while (true) {
+                try {
+                    Wrapper request = (Wrapper) streams.getOIS().readObject();
+                    if (request == null) {
+                        logger.info("Client closed the connection.");
+                        break;
+                    }
+                    logger.info("Received request: " + request);
+                    processStorageRequest(request, streams.getOOS());
+                } catch (EOFException e) {
+                    logger.info("Client disconnected normally.");
+                    break;
+                } catch (Exception e) {
+                    logger.log(Level.SEVERE, "Error processing client request", e);
+                    break;
+                }
             }
-        } catch (EOFException e) {
-            logger.info("Client disconnected normally");
-        } catch (ClassNotFoundException | IOException e) {
-            logger.log(Level.WARNING, "Client connection error", e);
         } catch (Exception e) {
-            logger.log(Level.SEVERE, "Unexpected error handling client", e);
+            logger.log(Level.SEVERE, "Unexpected error handling client " + streams.getRemoteAddress(), e);
         }
     }
 
-    private static void processRequest(Wrapper request, ObjectOutputStream oos) {
-        switch (request.getMessageType()) {
-            // case 0 -> handleKeyExchange(request, oos);
-            case 3 -> processStorageRequest(request, oos);
-            // default -> ;
-        }
-    }
-
-    private static void processStorageRequest(Wrapper request, ObjectOutputStream oos) {
-
-        String requestLine;
-        String[] parts = null;
+    private static void processStorageRequest(Wrapper request, ObjectOutputStream oos)
+            throws CryptoException, InvalidAlgorithmParameterException {
+        logger.info("=== Starting processStorageRequest ===");
         try {
-            requestLine = (String) RandomUtils.deserialize(request.getMessage());
+            logger.info("Received wrapper: " + request);
+            // Deserialize the incoming request message as a RequestServiceMessage.
+            logger.info("Deserializing RequestServiceMessage...");
+            RequestServiceMessage requestServiceMessage = (RequestServiceMessage) RandomUtils
+                    .deserialize(request.getMessage());
+            logger.info("RequestServiceMessage deserialized successfully.");
 
-            parts = requestLine.split(" ", 3);
-            if (parts.length < 2) {
-                // oos.write("ERROR: Invalid command format\n");
-                // write a error message
-                oos.flush();
+            byte messageType = request.getMessageType();
+            UUID messageId = request.getMessageId();
+            logger.info("MessageType: " + messageType + " | MessageId: " + messageId);
+
+            // Convert and retrieve the shared key used for decrypting the SGT.
+            SecretKey key = CryptoStuff.getInstance()
+                    .convertStringToSecretKey(cryptoConfig.getProperty("STORAGE_TGS_KEY"));
+            logger.info("Converted shared key from configuration.");
+
+            // Decrypt the Service Granting Ticket (SGT)
+            byte[] encryptedSgt = requestServiceMessage.getEncryptedSGT();
+            logger.info("Encrypted SGT received (length: " + encryptedSgt.length + "). Attempting decryption...");
+            byte[] sgtBytes = CryptoStuff.getInstance().decrypt(key, encryptedSgt);
+            ServiceGrantingTicket sgt = (ServiceGrantingTicket) RandomUtils.deserialize(sgtBytes);
+            logger.info("ServiceGrantingTicket decrypted successfully. [ClientId: " + sgt.getClientId()
+                    + ", ClientAddress: " + sgt.getClientAddress() + "]");
+
+            // Decrypting the Authenticator
+            byte[] encryptedAuth = requestServiceMessage.getAuthenticator();
+            logger.info("Encrypted Authenticator received (length: " + encryptedAuth.length
+                    + "). Attempting decryption...");
+            byte[] authBytes = CryptoStuff.getInstance().decrypt(sgt.getKey(), encryptedAuth);
+            Authenticator authenticator = (Authenticator) RandomUtils.deserialize(authBytes);
+            logger.info("Authenticator decrypted successfully. Timestamp: " + authenticator.getTimestamp());
+
+            // Validate Authenticator
+            logger.info("Validating Authenticator for client " + sgt.getClientId() + " at address "
+                    + sgt.getClientAddress());
+            if (!authenticator.isValid(sgt.getClientId(), sgt.getClientAddress())) {
+                logger.warning("Authenticator validation failed. Aborting request processing.");
                 return;
             }
-            logger.info("Request command: " + requestLine);
-            String command = parts[0].toUpperCase();
-            String path = parts[1];
-            String content = parts.length == 3 ? parts[2] : null;
+            logger.info("Authenticator is valid.");
 
-            switch (command) {
-                case "GET":
+            // Extract command and execute accordingly
+            Command command = sgt.getCommand();
+            String userId = sgt.getClientId();
+            String path = userId +  command.getPath();
+            logger.info(
+                    "Command received from client [" + userId + "]: " + command.getCommand() + " for path: " + path);
+
+            FilePayload content = command.getPayload();
+            List<String> files = null;
+            switch (command.getCommand()) {
+                case GET:
+                    logger.info("Executing GET command...");
                     String fileContent = fsManager.readFile(path);
-                    // oos.write(fileContent + "\n");
+                    logger.info("GET command executed. File read from path: " + path);
+                    // Optionally: attach fileContent in the response if needed.
                     break;
-                case "PUT":
+                case PUT:
+                    logger.info("Executing PUT command...");
                     if (content == null) {
-                        // writer.write("ERROR: Missing content for PUT\n");
+                        logger.warning("PUT command missing content for path: " + path);
                     } else {
                         fsManager.writeFile(path, content);
-                        // writer.write("SUCCESS: File saved\n");
+                        logger.info("PUT command executed. File written at: " + path);
                     }
                     break;
-                case "DELETE":
+                case RM:
+                    logger.info("Executing RM command...");
                     fsManager.deleteFile(path);
-                    // writer.write("SUCCESS: File deleted\n");
+                    logger.info("RM command executed. File deleted at: " + path);
                     break;
-                case "LIST":
-                    List<String> files = fsManager.listFolder(path);
-                    // writer.write(String.join(", ", files) + "\n");
+                case LS:
+                    logger.info("Executing LS command...");
+                    files = fsManager.listFolder(path);
+                    logger.info("LS command executed. Listed files in folder: " + path);
                     break;
                 default:
-                    // writer.write("ERROR: Unknown command\n");
+                    logger.warning("Unknown command received: " + command.getCommand());
             }
+
+            // Prepare and send the response message
+            byte[] responseContent = (files != null) ? String.join("\n", files).getBytes(StandardCharsets.UTF_8)
+                    : new byte[0];
+            ResponseServiceMessage res = new ResponseServiceMessage(new CommandReturn(command, responseContent), null);
+            logger.info("Sending response back to client...");
+            oos.writeObject(res);
             oos.flush();
+            logger.info("Response sent successfully.");
         } catch (IOException | ClassNotFoundException ex) {
+            logger.log(Level.WARNING, "Error processing storage request: " + ex.getMessage(), ex);
         }
+        logger.info("=== Finished processStorageRequest ===");
     }
 
-    // Configuration getters
+    // ----------------------- Configuration Getters -----------------------
+
     private static String[] getTlsProtocols() {
         String protocols = tlsConfig.getProperty("TLS-PROT-ENF", "TLSv1.2");
         return protocols.split(",");
@@ -282,5 +353,64 @@ public class StorageService {
 
     private static char[] getTruststorePassword() {
         return "BNCc7MdZuBJJYJQuRVnjbA==".toCharArray();
+    }
+
+    // ----------------------- Inner Classes -----------------------
+
+    private static class SocketStreams implements AutoCloseable {
+        private SSLSocket socket;
+        private ObjectOutputStream oos;
+        private ObjectInputStream ois;
+
+        public SocketStreams(SSLSocket socket) throws IOException {
+            this.socket = socket;
+            // Perform SSL handshake immediately.
+            socket.startHandshake();
+            logger.fine("SSL handshake completed with " + socket.getRemoteSocketAddress());
+        }
+
+        public ObjectOutputStream getOOS() throws IOException {
+            if (oos == null) {
+                oos = new ObjectOutputStream(socket.getOutputStream());
+                oos.flush();
+                logger.fine("Output stream initialized for " + getRemoteAddress());
+            }
+            return oos;
+        }
+
+        public ObjectInputStream getOIS() throws IOException {
+            if (ois == null) {
+                ois = new ObjectInputStream(socket.getInputStream());
+                logger.fine("Input stream initialized for " + getRemoteAddress());
+            }
+            return ois;
+        }
+
+        public String getRemoteAddress() {
+            return socket.getRemoteSocketAddress().toString();
+        }
+
+        @Override
+        public void close() {
+            try {
+                if (oos != null)
+                    oos.close();
+            } catch (Exception ex) {
+                logger.fine("Error closing output stream: " + ex.getMessage());
+            }
+            try {
+                if (ois != null)
+                    ois.close();
+            } catch (Exception ex) {
+                logger.fine("Error closing input stream: " + ex.getMessage());
+            }
+            try {
+                if (socket != null && !socket.isClosed())
+                    socket.close();
+            } catch (Exception ex) {
+                logger.fine("Error closing socket: " + ex.getMessage());
+            }
+            logger.info("Closed connection with " + getRemoteAddress());
+        }
     }
 }

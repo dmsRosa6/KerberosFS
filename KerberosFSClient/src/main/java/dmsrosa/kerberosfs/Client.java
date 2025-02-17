@@ -69,11 +69,7 @@ public class Client {
         }
     }
     
-    public static Map<String, UserInfo> usersDHKey = new HashMap<>();
-
-    public static final String[] TLS_PROT_ENF = properties.getProperty("TLS-PROT-ENF", "TLSv1.2").split(",");
-    public static final String[] CIPHERSUITES = properties.getProperty("CIPHERSUITES", "").split(",");
-    public static final String TLS_AUTH = properties.getProperty("TLS-AUTH");
+    public static Map<String, UserInfo> usersInfo = new HashMap<>();
 
     public static void main(String[] args) {
         SwingUtilities.invokeLater(ClientUI::new);

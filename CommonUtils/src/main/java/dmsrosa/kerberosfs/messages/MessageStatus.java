@@ -27,6 +27,6 @@ public enum MessageStatus {
                 return status;
             }
         }
-        return null; // Or throw an exception if desired
+        return null;
     }
 }
