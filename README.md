@@ -57,6 +57,8 @@ KerberosFS runs inside Docker containers to ensure isolation and reproducibility
 2. **Setup Certificates (if needed):**   
 Run the ```sh ./setup_certificates.sh``` script to configure the necessary certificates. This step also ensures that the passwords are updated as required.
 3. **Install Users (Optional):**
-Install users(optional), both in te auth and access controll, this is done manually by running the install classses.
+Install users(optional), both in te auth and access control, this is done manually by running the install classes.
 4. **Build and Run:**
 Execute the ```sh build_and_run.sh``` script to build the Docker images and start the containers.
+
+## NOT DONE YET :)
