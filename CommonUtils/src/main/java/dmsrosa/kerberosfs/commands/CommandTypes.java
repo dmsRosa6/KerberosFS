@@ -7,7 +7,7 @@ public enum CommandTypes {
     LOGIN(2),
     LS(2),
     MKDIR(2),
-    PUT(2),
+    PUT(3),
     RM(2),
     FILE(2),
     CP(3),

@@ -161,7 +161,7 @@ public class ClientController {
      * Executes a command by validating its structure and then either handling a login or
      * an authenticated service command.
      */
-    public CommandResponse executeCommand(String[] commandParts) throws ClientException {
+    public CommandResponse executeCommand(String[] commandParts) throws ClientException,InvalidCommandException {
         validateCommandStructure(commandParts);
         return isLoginCommand(commandParts)
                 ? handleLogin(commandParts)
@@ -210,7 +210,7 @@ public class ClientController {
             authenticateUser(streams, username, password, id);
             return new CommandResponse("Login successful", true);
         } catch (Exception e) {
-            throw new ClientException("Login failed", e);
+            return new CommandResponse("Login Failed", false);
         } finally {
             if (streams != null) {
                 streams.close();
@@ -235,7 +235,7 @@ public class ClientController {
         }
     }
 
-    private CommandResponse processAuthenticatedCommand(String[] commandParts) throws ClientException {
+    private CommandResponse processAuthenticatedCommand(String[] commandParts) throws ClientException,InvalidCommandException {
         Pair<CommandTypes, Command> commandPair = createCommand(commandParts);
         return executeCommandOverConnection(commandPair.second);
     }
@@ -245,25 +245,12 @@ public class ClientController {
                 .orElseThrow(() -> new InvalidCommandException("Invalid command: " + commandParts[0]));
         Command command;
         switch (type) {
-            case LOGIN:
-                throw new InvalidCommandException("Login handled separately");
-            case LS:
-            case MKDIR:
-                command = createLsMkdirCommand(type, commandParts);
-                break;
-            case PUT:
-                command = createPutCommand(type, commandParts);
-                break;
-            case GET:
-            case RM:
-            case FILE:
-                command = createFileOperationCommand(type, commandParts);
-                break;
-            case CP:
-                command = createCpCommand(type, commandParts);
-                break;
-            default:
-                throw new InvalidCommandException("Invalid Command");
+            case LOGIN -> throw new InvalidCommandException("Login handled separately");
+            case LS, MKDIR -> command = createLsMkdirCommand(type, commandParts);
+            case PUT -> command = createPutCommand(type, commandParts);
+            case GET, RM, FILE -> command = createFileOperationCommand(type, commandParts);
+            case CP -> command = createCpCommand(type, commandParts);
+            default -> throw new InvalidCommandException("Invalid Command");
         }
         return new Pair<>(type, command);
     }
@@ -273,10 +260,13 @@ public class ClientController {
     }
 
     private Command createPutCommand(CommandTypes type, String[] parts) {
-        if (parts.length < 3) {
-            throw new RuntimeException("Missing local file path for PUT command");
+        if (parts.length < 4) {
+            throw new RuntimeException("Missing local or remote file path for PUT command");
         }
+        String username = parts[1];
         String localFilePath = parts[2];
+        String remoteFilePath = parts[3];  // This is the destination path on the server
+
         File file = new File(localFilePath);
         if (!file.exists() || !file.isFile()) {
             throw new RuntimeException("Local file does not exist: " + localFilePath);
@@ -284,7 +274,7 @@ public class ClientController {
         try {
             byte[] fileContent = Files.readAllBytes(file.toPath());
             byte[] metaData = createFileMetaData(file.getName(), file.length(), file.lastModified());
-            return new Command(parts[1], new FilePayload(metaData, fileContent), parts[2], type);
+            return new Command(username, new FilePayload(metaData, fileContent), remoteFilePath, type);
         } catch (IOException ex) {
             throw new RuntimeException("Failed to read file: " + localFilePath, ex);
         }
@@ -330,11 +320,11 @@ public class ClientController {
                 sgt = requestServiceTicket(stream, command, authenticator);
 
                 Client.usersInfo.get(command.getUsername()).addSGT(command.getCommand().toString(), sgt);
-                ResponseServiceMessage response = executeServiceCommand(stream, command, sgt, authenticator);
+                Pair<Integer, ResponseServiceMessage> response = executeServiceCommand(stream, command, sgt, authenticator);
                 
                 return new CommandResponse(
-                        new String(response.getCommandReturn().getPayload(), StandardCharsets.UTF_8),
-                        true
+                        new String(response.second.getCommandReturn().getPayload(), StandardCharsets.UTF_8),
+                        response.first == 200 || response.first == 204? true:false 
                 );
             } finally {
                 if (stream != null) {
@@ -342,7 +332,10 @@ public class ClientController {
                 }
             }
         } catch (Exception e) {
-            throw new ClientException("Command execution failed", e);
+            return new CommandResponse(
+                        "Command execution failed",
+                        false
+                );
         }
     }
 
@@ -362,7 +355,7 @@ public class ClientController {
         }
     }
 
-    private ResponseServiceMessage executeServiceCommand(SocketStreams streams, Command command,
+    private Pair<Integer, ResponseServiceMessage> executeServiceCommand(SocketStreams streams, Command command,
                                                          ResponseTGSMessage sgt, Authenticator authenticator)
             throws ClientException {
         try {

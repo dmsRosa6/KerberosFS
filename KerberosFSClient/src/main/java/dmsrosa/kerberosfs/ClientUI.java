@@ -66,13 +66,10 @@ class ClientUI {
             // Append the command to the terminal.
             appendToTerminal("> " + command, Color.WHITE);
             try {
-                String response = cc.executeCommand(command.split(" ")).result();
-                appendToTerminal(response, Color.GREEN);
-            } catch (RuntimeException ex) {
-                appendToTerminal(ex.getMessage(), Color.RED);
+                CommandResponse cr = cc.executeCommand(command.split(" "));
+                appendToTerminal(cr.result().isEmpty()?"No Content":cr.result(), cr.success()?Color.GREEN:Color.RED);
             } catch (Exception ex) {
-                ex.printStackTrace();
-                appendToTerminal("Unexpected error: " + ex.getMessage(), Color.RED);
+                appendToTerminal(ex.getMessage(), Color.RED);
             } finally {
                 commandInput.setText("");
             }

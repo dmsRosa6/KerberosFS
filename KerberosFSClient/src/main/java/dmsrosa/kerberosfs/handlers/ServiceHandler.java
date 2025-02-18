@@ -17,6 +17,7 @@ import dmsrosa.kerberosfs.messages.RequestServiceMessage;
 import dmsrosa.kerberosfs.messages.ResponseServiceMessage;
 import dmsrosa.kerberosfs.messages.ResponseTGSMessage;
 import dmsrosa.kerberosfs.messages.Wrapper;
+import dmsrosa.kerberosfs.utils.Pair;
 import dmsrosa.kerberosfs.utils.RandomUtils;
 
 public class ServiceHandler {
@@ -55,7 +56,7 @@ public class ServiceHandler {
      * @param responseTGSMessage the original TGS response (to obtain the client service key)
      * @return the parsed ResponseServiceMessage or null if an error occurs
      */
-    public ResponseServiceMessage processServiceResponse(ObjectInputStream ois, ResponseTGSMessage responseTGSMessage) {
+    public Pair<Integer, ResponseServiceMessage> processServiceResponse(ObjectInputStream ois, ResponseTGSMessage responseTGSMessage) {
         try {
             // Read the wrapper that contains the encrypted response.
             Wrapper wrapper = (Wrapper) ois.readObject();
@@ -66,7 +67,7 @@ public class ServiceHandler {
             byte[] decryptedResponse = CryptoStuff.getInstance().decrypt(clientServiceKey, encryptedResponse);
 
             // Deserialize and return the ResponseServiceMessage.
-            return (ResponseServiceMessage) RandomUtils.deserialize(decryptedResponse);
+            return new Pair<>(wrapper.getStatus(), (ResponseServiceMessage) RandomUtils.deserialize(decryptedResponse));
         } catch (IOException | ClassNotFoundException | InvalidAlgorithmParameterException | CryptoException e) {
             Client.logger.log(Level.WARNING, e.getMessage());
             return null;
